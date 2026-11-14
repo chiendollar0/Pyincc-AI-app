@@ -10,6 +10,9 @@ dependencies:
   flutter:
     sdk: flutter
   before_after: ^3.1.0
+  image_picker: ^1.1.2
+  http: ^1.2.2
+  google_generative_ai: ^0.4.6
 
 dev_dependencies:
   flutter_test:
