@@ -1,5 +1,5 @@
-name: pyincc_app
-description: PYINCC - Hệ thống CSKH 2 tầng AI
+name: beauty_crm_app
+description: AI Beauty Manager - Hệ thống CSKH 2 tầng AI
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -10,9 +10,6 @@ dependencies:
   flutter:
     sdk: flutter
   before_after: ^3.1.0
-  image_picker: ^1.1.2
-  http: ^1.2.2
-  google_generative_ai: ^0.4.6
 
 dev_dependencies:
   flutter_test:
