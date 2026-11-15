@@ -35,7 +35,7 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
 
   final List<Widget> _screens = [
     const AiTriageInboxScreen(),
-    TryOnStudioScreen(
+    const TryOnStudioScreen(
       geminiApiKey: const String.fromEnvironment(
         'GEMINI_API_KEY',
         defaultValue: '',
