@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'screens/tryon/tryon_studio_screen.dart';
 
@@ -36,11 +36,11 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
   final List<Widget> _screens = [
     const AiTriageInboxScreen(),
     const TryOnStudioScreen(
-      geminiApiKey: const String.fromEnvironment(
+      geminiApiKey: String.fromEnvironment(
         'GEMINI_API_KEY',
         defaultValue: '',
       ),
-      imageGenApiUrl: const String.fromEnvironment(
+      imageGenApiUrl: String.fromEnvironment(
         'TRYON_API_URL',
         defaultValue: '',
       ),
