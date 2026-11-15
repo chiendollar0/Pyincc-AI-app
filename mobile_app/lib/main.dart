@@ -1,4 +1,4 @@
-import 'package:material_ui/material_ui.dart';
+import 'package:flutter/material.dart';
 
 import 'screens/tryon/tryon_studio_screen.dart';
 
