@@ -27,6 +27,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   File? _originalImage;
   Uint8List? _aiResultBytes;
   bool _isBusy = false;
+  double _sliderPosition = 0.5;
   String _note = 'Chọn ảnh mặt mộc của khách để bắt đầu.';
   String _selectedId = '1';
 
@@ -153,9 +154,11 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
                       child: _aiResultBytes == null
                           ? Image.file(_originalImage!, fit: BoxFit.cover)
                           : BeforeAfter(
-                              // before_after ^3.1.0 dùng ImageProvider
-                              beforeImage: FileImage(_originalImage!),
-                              afterImage: MemoryImage(_aiResultBytes!),
+                              value: _sliderPosition,
+                              before: Image.file(_originalImage!, fit: BoxFit.cover),
+                              after: Image.memory(_aiResultBytes!, fit: BoxFit.cover),
+                              onValueChanged: (v) =>
+                                  setState(() => _sliderPosition = v),
                             ),
                     ),
             ),
