@@ -36,14 +36,7 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
   final List<Widget> _screens = [
     const AiTriageInboxScreen(),
     const TryOnStudioScreen(
-      geminiApiKey: String.fromEnvironment(
-        'GEMINI_API_KEY',
-        defaultValue: '',
-      ),
-      imageGenApiUrl: String.fromEnvironment(
-        'TRYON_API_URL',
-        defaultValue: '',
-      ),
+      apiBaseUrl: String.fromEnvironment('TRYON_API_URL', defaultValue: ''),
     ),
     const ShiftAndBookingScreen(),
     const OwnerSettingsScreen(),

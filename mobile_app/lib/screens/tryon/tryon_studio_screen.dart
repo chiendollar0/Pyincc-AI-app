@@ -8,13 +8,11 @@ import 'package:image_picker/image_picker.dart';
 import '../../services/tryon_image_service.dart';
 
 class TryOnStudioScreen extends StatefulWidget {
-  final String geminiApiKey;
-  final String? imageGenApiUrl;
+  final String apiBaseUrl;
 
   const TryOnStudioScreen({
     super.key,
-    required this.geminiApiKey,
-    this.imageGenApiUrl,
+    required this.apiBaseUrl,
   });
 
   @override
@@ -65,10 +63,10 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     });
 
     try {
-      final service = TryOnImageService(geminiApiKey: widget.geminiApiKey);
-      final analysis = await service.analyzeFaceAndSuggestCatalog(
-        customerFaceImage: _originalImage!,
-        shopCatalog: _catalog,
+      final service = TryOnImageService(apiBaseUrl: widget.apiBaseUrl);
+      final analysis = await service.analyzeFace(
+        image: _originalImage!,
+        catalog: _catalog,
       );
 
       if (!mounted) return;
@@ -99,14 +97,11 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
 
     setState(() => _isBusy = true);
     try {
-      final service = TryOnImageService(
-        geminiApiKey: widget.geminiApiKey,
-        imageGenApiUrl: widget.imageGenApiUrl,
-      );
-      final bytes = await service.generateTryOnPreview(
-        customerFaceImage: image,
+      final service = TryOnImageService(apiBaseUrl: widget.apiBaseUrl);
+      final bytes = await service.generatePreview(
+        image: image,
         category: item['category'] as String,
-        stylePromptHint: item['prompt'] as String,
+        prompt: item['prompt'] as String,
       );
       if (!mounted) return;
       setState(() => _aiResultBytes = bytes);
