@@ -1,5 +1,6 @@
-import 'package:before_after/before_after.dart';
 import 'package:flutter/material.dart';
+
+import 'screens/tryon/tryon_studio_screen.dart';
 
 void main() {
   runApp(const BeautyCrmApp());
@@ -34,7 +35,16 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
 
   final List<Widget> _screens = [
     const AiTriageInboxScreen(),
-    const VirtualTryOnScreen(),
+    TryOnStudioScreen(
+      geminiApiKey: const String.fromEnvironment(
+        'GEMINI_API_KEY',
+        defaultValue: '',
+      ),
+      imageGenApiUrl: const String.fromEnvironment(
+        'TRYON_API_URL',
+        defaultValue: '',
+      ),
+    ),
     const ShiftAndBookingScreen(),
     const OwnerSettingsScreen(),
   ];
@@ -186,98 +196,6 @@ class AiTriageInboxScreen extends StatelessWidget {
             ),
           );
         },
-      ),
-    );
-  }
-}
-
-class VirtualTryOnScreen extends StatefulWidget {
-  const VirtualTryOnScreen({super.key});
-
-  @override
-  State<VirtualTryOnScreen> createState() => _VirtualTryOnScreenState();
-}
-
-class _VirtualTryOnScreenState extends State<VirtualTryOnScreen> {
-  double _sliderValue = 0.5;
-  String _selectedCatalog = 'Mày sợi Hairstroke Nâu Tây';
-
-  final List<String> _catalogSamples = [
-    'Mày sợi Hairstroke Nâu Tây',
-    'Mày Shading Ombre Tự Nhiên',
-    'Môi Phun Collagen Cam Đào',
-    'Môi Khử Thâm Hồng Baby',
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('AI Ghép Mẫu Mày / Môi')),
-      body: Column(
-        children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: BeforeAfter(
-                  value: _sliderValue,
-                  before: Container(
-                    color: Colors.grey.shade300,
-                    child: const Center(
-                      child: Text(
-                        'ẢNH MẶT MỘC KHÁCH GỬI\n(Kéo thanh trượt để so sánh)',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-                  after: Container(
-                    color: Colors.pink.shade100,
-                    child: Center(
-                      child: Text(
-                        'ẢNH AI ĐÃ GHÉP:\n$_selectedCatalog',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
-                  onValueChanged: (value) => setState(() => _sliderValue = value),
-                ),
-              ),
-            ),
-          ),
-          SizedBox(
-            height: 60,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              itemCount: _catalogSamples.length,
-              itemBuilder: (context, index) {
-                final item = _catalogSamples[index];
-                final isSelected = item == _selectedCatalog;
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(item),
-                    selected: isSelected,
-                    onSelected: (_) => setState(() => _selectedCatalog = item),
-                  ),
-                );
-              },
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: () {},
-                icon: const Icon(Icons.share),
-                label: const Text('Gửi ảnh Demo vào khung chat khách'),
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
