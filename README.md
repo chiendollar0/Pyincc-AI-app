@@ -2,7 +2,7 @@
 
 Ứng dụng Flutter và các dịch vụ backend đang được phát triển cho cơ sở phun xăm thẩm mỹ, spa và salon. Mục tiêu là kết nối hội thoại khách hàng, tư vấn, demo ảnh, lịch hẹn, phân ca và chăm sóc sau dịch vụ trong một quy trình có chủ tiệm kiểm soát.
 
-> Trạng thái hiện tại: Android/iOS scaffold đã có trong repo. GitHub Actions gần nhất đã chạy thành công bước CI mang tên Build APK; điều này xác nhận workflow hiện tại xanh, không thay thế kiểm thử trên thiết bị hoặc xác nhận sẵn sàng phát hành. Các màn hình Flutter vẫn còn dữ liệu/mock và chưa có backend Try-On, Meta webhook hoặc kết nối dữ liệu Supabase hoàn chỉnh.
+> Trạng thái hiện tại: Android/iOS scaffold đã có trong repo. GitHub Actions gần nhất đã chạy thành công bước CI mang tên Build APK; điều này xác nhận workflow hiện tại xanh, không thay thế kiểm thử trên thiết bị hoặc xác nhận sẵn sàng phát hành. Các màn hình Flutter vẫn còn dữ liệu/mock và chưa có backend Try-On, Meta webhook hoặc kết nối dữ liệu Supabase hoàn chỉnh. Ảnh chụp được cung cấp cho thấy màn hình khởi động Flutter; chỉ ảnh này chưa đủ để kết luận ứng dụng bị treo hay đã mở đến dashboard.
 
 ## Mục tiêu sản phẩm
 
@@ -76,6 +76,10 @@ Build APK debug:
 ```bash
 flutter build apk --debug
 ```
+
+### Màn hình khởi động
+
+Ảnh chụp được cung cấp hiển thị logo Flutter trên nền trắng — đây là màn hình khởi động của ứng dụng. Nếu màn hình này chỉ xuất hiện thoáng qua, đó có thể là quá trình khởi chạy bình thường. Nếu ứng dụng ở lại màn hình đó lâu hoặc không chuyển sang giao diện, cần kiểm tra log thiết bị và lỗi khởi chạy; ảnh chụp một mình không xác định được nguyên nhân.
 
 CI GitHub Actions:
 
