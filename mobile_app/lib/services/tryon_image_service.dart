@@ -53,19 +53,37 @@ class TryOnImageService {
     required File image,
     required List<Map<String, dynamic>> catalog,
   }) async {
+    final url = Uri.parse(
+      'https://ihufvqrxdswgbagzhydb.supabase.co/functions/v1/tryon-analyze',
+    );
+
     final bytes = await image.readAsBytes();
     if (bytes.isEmpty) {
       throw Exception('Ảnh mặt khách rỗng hoặc không đọc được.');
     }
 
-    return _postJson(
-      path: '/api/tryon/analyze',
-      body: {
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
         'image_base64': base64Encode(bytes),
         'catalog': catalog,
-      },
-      timeout: const Duration(seconds: 60),
+      }),
     );
+
+    if (response.statusCode != 200) {
+      throw Exception('Backend lỗi HTTP ${response.statusCode}: ${response.body}');
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw Exception('Backend trả về JSON không đúng cấu trúc object.');
+    }
+    if (decoded['analysis'] == null) {
+      throw Exception('Backend không trả về analysis: ${response.body}');
+    }
+
+    return decoded['analysis'] as Map<String, dynamic>;
   }
 
   Future<Uint8List> generatePreview({
