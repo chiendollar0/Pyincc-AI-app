@@ -1,7 +1,9 @@
+// ignore_for_file: deprecated_member_use
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:before_after/before_after.dart';
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
