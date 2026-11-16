@@ -1,5 +1,4 @@
 // ignore_for_file: deprecated_member_use
-// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 
 import 'screens/tryon/tryon_studio_screen.dart';
