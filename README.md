@@ -1,143 +1,134 @@
-# HỆ THỐNG QUẢN LÝ VẬN HÀNH & CSKH 2 TẦNG AI (ANDROID / iOS & ZALO BOT)
+# PYINCC — Hệ thống quản lý vận hành & chăm sóc khách hàng
 
-Giải pháp quản lý vận hành chuyên biệt cho cơ sở dịch vụ (**Phun xăm thẩm mỹ, Spa, Salon**) kết hợp hạ tầng **Meta Business Suite** và **Google Gemini AI**. 
+Ứng dụng Flutter và các dịch vụ backend đang được phát triển cho cơ sở phun xăm thẩm mỹ, spa và salon. Mục tiêu là kết nối hội thoại khách hàng, tư vấn, demo ảnh, lịch hẹn, phân ca và chăm sóc sau dịch vụ trong một quy trình có chủ tiệm kiểm soát.
 
-Hệ thống hỗ trợ song song **2 chế độ sử dụng**:
-1. **Ứng dụng di động chuyên nghiệp (Android & iOS):** Giao diện trực quan đầy đủ tính năng cho Chủ tiệm, Sale và Kỹ thuật viên.
-2. **Chế độ Zalo Bot "Không cần cài App":** Điều hành, nhận báo cáo, duyệt ca khó và gửi ảnh demo trực tiếp qua tin nhắn Zalo dành cho chủ tiệm/nhân viên ngại cài thêm ứng dụng.
+> Trạng thái hiện tại: Android/iOS scaffold đã có trong repo. GitHub Actions gần nhất đã chạy thành công bước CI mang tên Build APK; điều này xác nhận workflow hiện tại xanh, không thay thế kiểm thử trên thiết bị hoặc xác nhận sẵn sàng phát hành. Các màn hình Flutter vẫn còn dữ liệu/mock và chưa có backend Try-On, Meta webhook hoặc kết nối dữ liệu Supabase hoàn chỉnh.
 
----
+## Mục tiêu sản phẩm
 
-## 1. Kiến trúc "2 Tầng AI" Tối Ưu Chi Phí (Zero-Cost Architecture)
+- Tiếp nhận và chăm sóc khách qua Meta Business Suite/Messenger; hỗ trợ chủ tiệm quản lý nội dung, trả lời bình luận và bài đăng theo quyền/API Meta được cấp.
+- Dùng Gemini ở backend để phân loại hội thoại, tóm tắt nhu cầu, soạn gợi ý tư vấn và nhận diện khách tiềm năng cần chăm sóc.
+- Cho nhân viên chọn ảnh khách và mẫu trong catalog, tạo ảnh demo trước/sau qua backend; nhân viên/chủ tiệm duyệt trước khi gửi cho khách.
+- Quản lý lịch hẹn, trạng thái đặt lịch, kỹ thuật viên phụ trách, ca làm và giờ làm.
+- Theo dõi nhắc hẹn và chăm sóc sau dịch vụ, với báo cáo cho chủ tiệm.
+- Cung cấp bot Zalo như một kênh hỗ trợ điều hành tùy chọn; không thay thế luồng Meta hoặc quyền kiểm duyệt của nhân viên.
 
-* **Tầng 1 — Meta AI (Tuyến đầu tiếp đón miễn phí 100%):**
-  * Tận dụng trực tiếp hạ tầng lưu trữ và Bot mặc định của **Meta Business Suite / Messenger**.
-  * Tự động chào hỏi, trả lời câu hỏi cơ bản (giờ mở cửa, địa chỉ, bảng giá chung) và thu thập ảnh mặt mộc của khách hàng 24/7 mà không tốn tài nguyên máy chủ.
-* **Tầng 2 — Google Gemini AI (Tuyến cuối đóng vai Chủ tiệm):**
-  * Chỉ kích hoạt ở bước phân loại cuối cùng khi có sự kiện quan trọng từ Meta Webhook (sử dụng gói **Google AI Studio Free Tier** theo cơ chế mỗi tiệm tự nhập API Key miễn phí).
-  * **Sàng lọc & Phân loại:** Đọc kết quả từ Meta AI để tách bạch *Khách hỏi dạo*, *Khách cần gấp*, *Ca khó/Khiếu nại*, và *Khách muốn đặt lịch*.
-  * **Xử lý Ca khó & Điều phối:** Gắn cờ đỏ khẩn cấp, soạn sẵn câu trả lời chuẩn phong cách chủ tiệm và tự động đẩy hội thoại cho nhân viên giỏi nhất đang trong ca trực.
-  * **Edit ảnh Demo Mày/Môi (Virtual Try-On):** Tiếp nhận ảnh khách gửi + mã mẫu chọn từ Catalog của tiệm, tự động ghép dáng mày/màu môi xem trước và gửi trả lại khung chat.
-  * **Báo cáo tổng hợp cuối ngày:** Tự động đọc toàn bộ hội thoại trong ngày và gửi bản tóm tắt tình hình chốt đơn, hiệu suất nhân viên cho chủ tiệm lúc 21h00.
+## Kiến trúc dự kiến
 
----
+1. Meta Business / Messenger — kênh tiếp nhận: inbox, bình luận và nội dung trang được xử lý thông qua API, webhook, quyền ứng dụng và chính sách của Meta. Tự động hóa chỉ bật sau khi cấu hình và xác minh quyền tích hợp.
+2. Backend — lớp nghiệp vụ và bảo mật: xác thực người dùng, kiểm tra tổ chức/quyền, gọi Gemini, xử lý ảnh, lưu dữ liệu và tích hợp Meta/Supabase. Không đưa Gemini API key hoặc khóa dịch vụ có quyền cao vào APK.
+3. Gemini — trợ lý: phân loại, tóm tắt, gợi ý tư vấn/nhắc chăm sóc và hỗ trợ tạo demo ảnh thông qua dịch vụ backend. AI chỉ đề xuất; nhân viên hoặc chủ tiệm duyệt nội dung và thao tác quan trọng.
+4. Flutter app — bảng điều khiển: inbox/triage, Try-On, lịch/ca và tác vụ chủ tiệm.
+5. Zalo bot — kênh phụ: phục vụ thông báo/lệnh quản lý sau khi có ánh xạ người dùng–tổ chức, phân quyền và ghi nhận thao tác.
 
-## 2. Chế độ vận hành linh hoạt (App Mobile hoặc Bot Zalo)
+Không nên giả định Meta AI/Business Suite hoặc các gói miễn phí cung cấp mọi tính năng tự động hóa miễn phí. Phạm vi API, quyền truy cập, hạn mức và chi phí cần được kiểm tra theo cấu hình tài khoản thực tế.
 
-### 2.1. Giao diện App Mobile (Android & iOS - Flutter)
-Thiết kế tối giản, chia 4 tab điều hướng chính (Bottom Navigation Bar) giúp thao tác bằng 1 tay trên điện thoại:
-* **Tab 1 — Hộp thư & Sàng lọc AI (`Inbox & Triage`):**
-  * Hiển thị danh sách hội thoại từ Facebook Messenger & Zalo đã được Gemini gắn nhãn ưu tiên (*Gấp, Ca khó, Đã thử mẫu, Thường*).
-  * Thanh gợi ý câu trả lời thông minh của Gemini nằm ngay trên bàn phím để nhân viên bấm gửi 1 chạm.
-* **Tab 2 — Thử mẫu AI (`Virtual Try-On Studio`):**
-  * Kho Catalog mẫu Mày / Môi của tiệm dạng lưới hình ảnh.
-  * Bấm chọn ảnh khách + chọn mẫu → Xem trước ảnh AI ghép hoàn thiện và gửi thẳng vào cuộc trò chuyện.
-* **Tab 3 — Lịch hẹn & Ca trực (`Shifts & Booking`):**
-  * Bảng phân ca trực nhân viên (Sáng/Chiều/Tối) với nút bật/tắt trạng thái *Đang trực* để tự động chia khách.
-  * Lịch hẹn khách hàng gắn kèm ảnh mẫu mày/môi đã chốt và tên kỹ thuật viên phụ trách.
-* **Tab 4 — Trợ lý Chủ tiệm (`Owner Dashboard`):**
-  * Báo cáo tổng hợp cuối ngày do Gemini biên soạn.
-  * Mục cài đặt 1 chạm: Nút kết nối **Facebook Login for Business**, quét mã QR Zalo và ô dán **Gemini API Key miễn phí**.
+## Chức năng và trạng thái triển khai
 
-### 2.2. Chế độ Bot Zalo "Lười cài App" (Zero-Install Mode)
-Dành cho chủ tiệm hoặc nhân viên không muốn cài App lên điện thoại, toàn bộ việc quản lý diễn ra ngay trong khung chat Zalo quen thuộc:
-* **Nhận cảnh báo & Báo cáo:** Bot Zalo tự động nhắn tin cho Chủ tiệm mỗi khi Gemini phát hiện *Ca khó*, *Khách VIP* hoặc gửi *Báo cáo tổng hợp 21h00*.
-* **Điều khiển bằng câu lệnh tự nhiên:** Chủ tiệm chỉ cần nhắn tin cho Bot Zalo (ví dụ: *"Hôm nay có bao nhiêu khách đặt lịch?"*, *"Chuyển ca cho bé Lan trực chiều nay"*, *"Duyệt giảm giá 10% cho khách Nguyễn Thị A"*), Gemini sẽ tự hiểu ý định và cập nhật thẳng vào hệ thống.
-* **Nhận ảnh Demo qua Zalo:** Khi khách trên Fanpage gửi ảnh thử mẫu, Bot Zalo chuyển ảnh demo cho chủ/nhân viên xem duyệt chỉ với 1 nút bấm.
+| Hạng mục | Trạng thái repo hiện tại |
+| --- | --- |
+| Flutter app và scaffold Android/iOS | Có trong `mobile_app/`; workflow Build APK gần nhất thành công |
+| UI dashboard và Try-On | Có mã UI; cần tiếp tục kiểm tra theo CI/thiết bị; dữ liệu chưa nối backend đầy đủ |
+| Gemini Try-On proxy `/analyze`, `/generate` | Chưa có trong repo; cần triển khai trước khi dùng an toàn từ app |
+| Meta webhook/API cho inbox, bình luận, đăng bài | Chưa có thư mục/dịch vụ triển khai trong repo hiện tại |
+| Supabase schema ban đầu | Có `database/schema.sql`; cần bổ sung RLS, chính sách và migration trước khi dùng dữ liệu thật |
+| Zalo manager bot | Có mã khởi tạo trong `backend_bridge/zalo-manager-bot/`; tích hợp nghiệp vụ và kiểm soát quyền còn cần hoàn thiện |
+| Lịch/ca, CRM và chăm sóc sau dịch vụ | Schema/UI còn ở mức nền tảng hoặc mock; chưa xác nhận luồng CRUD end-to-end |
+| Báo cáo khách tiềm năng và báo cáo định kỳ | Chưa có dịch vụ báo cáo/cron hoàn chỉnh trong repo |
 
----
-
-## 3. Cấu trúc thư mục dự án (Repository Structure)
+## Cấu trúc repo hiện có
 
 ```text
-app-cskh/
-├── mobile_app/                  # Mã nguồn Giao diện App Android & iOS (Flutter)
+Pyincc-AI-app/
+├── .github/workflows/build.yml
+├── mobile_app/
+│   ├── android/                     # Native scaffold Android
+│   ├── ios/                         # Native scaffold iOS
 │   ├── lib/
-│   │   ├── core/                # Theme UI, Màu sắc thương hiệu thẩm mỹ, Constants
-│   │   ├── models/              # Data Models (Organization, User, Shift, Catalog, Booking)
-│   │   ├── services/
-│   │   │   ├── meta_service.dart        # Gọi Meta Graph API đọc/gửi tin nhắn & bình luận
-│   │   │   ├── gemini_owner_agent.dart  # AI phân loại cuối, xử lý ca khó & báo cáo
-│   │   │   └── tryon_image_service.dart # Gọi AI ghép mẫu mày/môi lên ảnh khách
-│   │   ├── screens/
-│   │   │   ├── inbox/           # UI Hộp thư hợp nhất & Thẻ phân loại Gemini
-│   │   │   ├── tryon/           # UI Catalog chọn mẫu & So sánh ảnh trước/sau (Before-After)
-│   │   │   ├── schedule/        # UI Phân ca trực & Lịch hẹn kỹ thuật viên
-│   │   │   └── settings/        # UI Kết nối Meta Business & Nhập Gemini API Key
-│   │   └── main.dart
-│   └── pubspec.yaml             # Khai báo thư viện UI & SDK
-├── backend_bridge/              # Dịch vụ nền & Bot Zalo (Node.js / TypeScript)
-│   ├── meta-webhook/            # Nhận sự kiện từ Meta AI & ẩn comment chứa SĐT
-│   ├── zalo-manager-bot/        # Bot Zalo điều hành không cần cài App (dùng zca-js)
-│   └── cron-daily-report/       # Tự động gọi Gemini tổng hợp báo cáo lúc 21h00
-├── database/
-│   └── schema.sql               # Mã SQL khởi tạo bảng trên Supabase
+│   │   ├── main.dart
+│   │   ├── screens/tryon/tryon_studio_screen.dart
+│   │   └── services/tryon_image_service.dart
+│   └── pubspec.yaml
+├── backend_bridge/
+│   └── zalo-manager-bot/
+│       ├── .env.example
+│       ├── index.js
+│       └── package.json
+├── database/schema.sql
 └── README.md
 ```
 
----
+Các thư mục như `backend_bridge/tryon-proxy`, `backend_bridge/meta-webhook`, `mobile_app/lib/core`, `models`, `screens/inbox`, `screens/schedule` và `screens/settings` là hạng mục kiến trúc dự kiến, chưa nên coi là đã được triển khai nếu chưa xuất hiện trong repo.
 
-## 4. Cấu hình Giao diện App Mobile (`pubspec.yaml` chuẩn)
+## Chạy ứng dụng Flutter
 
-Sử dụng các thư viện UI mã nguồn mở nhẹ, mượt mà và chuẩn thiết kế hiện đại cho cả Android (Material 3) và iOS (Cupertino):
+Cần cài Flutter SDK và Android SDK/JDK phù hợp trên môi trường phát triển.
 
-```yaml
-dependencies:
-  flutter:
-    sdk: flutter
-  # Backend & Xác thực miễn phí
-  supabase_flutter: ^2.8.0
-  # Trí tuệ nhân tạo Google Gemini (Đóng vai Chủ tiệm)
-  google_generative_ai: ^0.4.6
-  # Giao diện Chat & So sánh ảnh trước/sau (Before/After)
-  flutter_chat_ui: ^1.6.15
-  before_after: ^3.1.0
-  # Giao diện Lịch hẹn & Phân ca trực
-  table_calendar: ^3.1.2
-  # Kết nối đăng nhập Facebook Business
-  flutter_facebook_auth: ^7.1.1
-  # Quản lý trạng thái & Lưu cấu hình cục bộ
-  provider: ^6.1.2
-  flutter_dotenv: ^5.1.0
-```
-
----
-
-## 5. Hướng dẫn Build & Triển khai nhanh
-
-### Bước 1: Dựng Database miễn phí (Supabase)
-1. Tạo dự án trên [Supabase](https://supabase.com).
-2. Chạy file `database/schema.sql` để tạo 6 bảng cốt lõi (`organizations`, `users`, `shifts`, `catalog_items`, `conversations`, `bookings`).
-
-### Bước 2: Kích hoạt Bot Zalo điều hành (Không cần cài App)
-1. Cài đặt Node.js trên máy chủ miễn phí (Oracle Cloud Free Tier hoặc Render).
-2. Chạy thư mục `backend_bridge/zalo-manager-bot`, quét mã QR đăng nhập tài khoản Zalo của Bot điều hành để kích hoạt tính năng nhận báo cáo và ra lệnh qua tin nhắn Zalo.
-
-### Bước 3: Build App Android & iOS (Flutter)
 ```bash
 cd mobile_app
 flutter pub get
-
-# Chạy thử nghiệm trên điện thoại thật hoặc máy ảo
+flutter analyze
 flutter run
-
-# Đóng gói file cài đặt Android (.apk / .aab)
-flutter build apk --release
-flutter build appbundle --release
-
-# Đóng gói file cài đặt iOS (.ipa - trên macOS hoặc Codemagic)
-flutter build ipa --release
 ```
 
----
+Build APK debug:
 
-## 6. Nguồn tham khảo & Thư viện mã nguồn mở (Giấy phép thương mại)
+```bash
+flutter build apk --debug
+```
 
-* **Flutter Chat UI (MIT):** https://github.com
-* **Before After Image Slider (MIT):** https://pub.dev *(Dùng làm thanh kéo so sánh khuôn mặt khách trước và sau khi AI ghép mẫu mày/môi)*
-* **Table Calendar (Apache 2.0):** https://github.com *(Dùng làm giao diện xếp ca trực và lịch hẹn)*
-* **Google Generative AI Dart SDK (Apache 2.0):** https://github.com
-* **Meta Messenger Platform & Webhooks:** https://facebook.com
-* **zca-js — Bot Zalo điều hành không cần cài App (MIT):** https://github.com
-* **MediaPipe Face Landmarker (Apache 2.0):** https://github.com
-* **ComfyUI Virtual Try-On Workflow (GPL-3.0):** https://github.com
+CI GitHub Actions:
+
+- Workflow: [Build APK](https://github.com/chiendollar0/Pyincc-AI-app/actions/workflows/build.yml)
+- Run gần nhất được kiểm tra: [Run #15](https://github.com/chiendollar0/Pyincc-AI-app/actions/runs/43848441675) — kết quả success.
+
+## Backend và dữ liệu — kế hoạch triển khai
+
+### Try-On proxy
+
+Tạo dịch vụ `backend_bridge/tryon-proxy/` với các endpoint dự kiến:
+
+- `POST /api/tryon/analyze` — nhận ảnh và catalog, trả JSON đã được backend xác thực/kiểm tra cấu trúc.
+- `POST /api/tryon/generate` — tạo ảnh demo và trả dữ liệu ảnh hoặc URL lưu trữ an toàn.
+
+Cần giới hạn kích thước/định dạng ảnh, thời gian xử lý, tốc độ gọi, xác thực người dùng, kiểm tra quyền theo tổ chức và xử lý/xóa ảnh theo chính sách rõ ràng. API key Gemini chỉ nằm trong secrets của server. Không dùng một token tĩnh nhúng trong app làm cơ chế xác thực.
+
+### Supabase
+
+Schema nền nằm ở `database/schema.sql`, gồm `organizations`, `users`, `shifts`, `catalog_items`, `conversations` và `bookings`. Trước khi đưa dữ liệu thật vào app, cần:
+
+- bật RLS cho các bảng và viết policy giới hạn dữ liệu theo tổ chức/người dùng đã xác thực;
+- không đặt `service_role` key trong Flutter hoặc client;
+- bổ sung bảng/lược đồ cho tin nhắn, tác vụ chăm sóc, consent, audit log và quan hệ cần thiết nếu nghiệp vụ yêu cầu;
+- thêm index, ràng buộc dữ liệu và migration có thể lặp lại;
+- kiểm tra phân quyền bằng tài khoản thuộc các tổ chức khác nhau.
+
+### Meta Business
+
+Meta webhook/API cần được thiết kế riêng: xác minh chữ ký webhook, cấu hình quyền ứng dụng/page, quản lý token phía server, chống xử lý sự kiện trùng lặp và tuân thủ chính sách nền tảng. Gợi ý trả lời/bài đăng nên ở trạng thái nháp để chủ tiệm duyệt; chỉ tự gửi/đăng khi đã cấu hình quyền và có lựa chọn rõ ràng.
+
+### Zalo bot
+
+Mã cơ sở hiện có tại `backend_bridge/zalo-manager-bot/`. Cần hoàn thiện ánh xạ Zalo ID tới người dùng và tổ chức, quyền owner/nhân viên, truy vấn dữ liệu đúng tổ chức, xác nhận thao tác sau khi ghi database thành công, logging an toàn và xử lý lỗi. Không khẳng định đã đổi ca/đặt lịch nếu thao tác chưa được lưu thành công.
+
+## Lộ trình ưu tiên
+
+1. Chuyển Try-On khỏi gọi Gemini trực tiếp từ app sang backend có xác thực; thống nhất hợp đồng JSON và giới hạn ảnh.
+2. Bổ sung RLS/policies và kiểm thử cách ly dữ liệu tổ chức trong Supabase.
+3. Hoàn thiện mô hình hội thoại/tin nhắn, khách tiềm năng, nhắc lịch và chăm sóc sau dịch vụ.
+4. Xây Meta webhook/API cho inbox và bình luận; thêm quy trình duyệt trước khi gửi hoặc đăng.
+5. Hoàn thiện lịch hẹn, phân công kỹ thuật viên/ca làm, chống trùng lịch và ghi audit log.
+6. Tích hợp báo cáo và nhắc chăm sóc sau dịch vụ; kiểm thử nghiệp vụ end-to-end.
+7. Chạy `flutter analyze`, test backend, build APK và kiểm thử trên thiết bị; chỉ sau đó đánh giá mức sẵn sàng phát hành.
+
+## Bảo mật, quyền riêng tư và vận hành
+
+- Không commit `.env`, Gemini API key, Meta token, Supabase service-role key hoặc thông tin đăng nhập Zalo.
+- Ảnh khuôn mặt và dữ liệu khách hàng chỉ được tải lên khi có thông báo/đồng ý phù hợp; cần nêu rõ mục đích, dịch vụ bên nhận, thời hạn lưu và cách yêu cầu xóa.
+- Mã hóa truyền tải, giới hạn truy cập, hạn chế log dữ liệu cá nhân và có quy trình xóa dữ liệu/ứng phó sự cố.
+- Cần rà soát quy định bảo vệ dữ liệu cá nhân áp dụng tại nơi triển khai (bao gồm Nghị định 13/2023/NĐ-CP khi phù hợp) trước khi xử lý dữ liệu khách hàng thực.
+- Gemini có thể tạo nội dung sai; nhân viên cần duyệt tư vấn, hình demo, lịch và nội dung đăng trước khi thực hiện.
+
+## Đóng góp
+
+Mỗi tính năng nên đi kèm cập nhật README, kiểm thử phù hợp và trạng thái triển khai chính xác. Không ghi nhận một chức năng là hoàn tất cho đến khi có kiểm thử hoặc CI chứng minh được.
