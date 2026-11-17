@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: pyincc-meta-webhook
+    runtime: node
+    plan: free
+    rootDir: backend_bridge/meta-webhook
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        value: https://ihufvqrxdswgbagzhydb.supabase.co
+      - key: SUPABASE_STORAGE_BUCKET
+        value: customer-media
+      - key: META_GRAPH_API_VERSION
+        value: v19.0
+      - key: VERIFY_TOKEN
+        generateValue: true
+      - key: API_KEY
+        generateValue: true
+      - key: DEFAULT_ORG_ID
+        value: ""
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: PAGE_ID
+        sync: false
+      - key: PAGE_ACCESS_TOKEN
+        sync: false

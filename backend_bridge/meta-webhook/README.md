@@ -2,6 +2,19 @@
 
 Node.js service for receiving Meta webhook events, validating Meta signatures, storing customer messages/media in Supabase, and sending staff-approved Messenger replies.
 
+## Deploy nhanh lên Render bằng Blueprint (`render.yaml`)
+
+1. Mở [Render Dashboard](https://dashboard.render.com) → bấm **New +** → chọn **Blueprint**.
+2. Chọn repository **`chiendollar0/Pyincc-AI-app`**. Render sẽ tự đọc file `render.yaml` ở thư mục gốc:
+   - Tự cấu hình `rootDir: backend_bridge/meta-webhook`, `npm install`, `npm start`, health check `/health`.
+   - Tự điền sẵn `SUPABASE_URL`, `SUPABASE_STORAGE_BUCKET`, `META_GRAPH_API_VERSION`.
+   - Tự sinh ngẫu nhiên `VERIFY_TOKEN` và `API_KEY` (sau khi tạo xong, mở tab **Environment** trên Render để copy 2 giá trị này dùng cho Meta Webhook và App Flutter).
+3. Chỉ cần dán 4 thông số bảo mật khi Render hỏi:
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `META_APP_SECRET`
+   - `PAGE_ID`
+   - `PAGE_ACCESS_TOKEN`
+
 ## Local run
 
 ```bash
