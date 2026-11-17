@@ -42,18 +42,18 @@ const supabase = config.supabaseUrl && config.supabaseServiceRoleKey
 
 // Middleware 1: Require authenticated Supabase User JWT (Authorization: Bearer <jwt>) for App routes
 async function requireAuth(req, res, next) {
-  if (!supabase) {
-    return res.status(503).json({
-      error: 'Supabase is not configured on Render (missing SUPABASE_SERVICE_ROLE_KEY)',
-    });
-  }
-
   const authHeader = req.get('authorization') || '';
   const bearerMatch = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
   const bearerToken = bearerMatch ? bearerMatch[1].trim() : '';
 
   if (!bearerToken) {
     return res.status(401).json({ error: 'Unauthorized: missing Bearer JWT' });
+  }
+
+  if (!supabase) {
+    return res.status(503).json({
+      error: 'Supabase is not configured on Render (missing SUPABASE_SERVICE_ROLE_KEY)',
+    });
   }
 
   try {
@@ -752,15 +752,15 @@ app.get('/messages', requireAuth, async (req, res) => {
 });
 
 app.post('/webhook', express.raw({ type: 'application/json', limit: '10mb' }), async (req, res) => {
-  if (!config.metaAppSecret || !supabase) {
-    return res.status(503).send('Service not configured');
-  }
   const rawBody = req.body;
   if (!Buffer.isBuffer(rawBody) || rawBody.length === 0) {
     return res.status(400).send('Missing body');
   }
-  if (!verifyMetaSignature(rawBody, req.get('x-hub-signature-256'))) {
+  if (!config.metaAppSecret || !verifyMetaSignature(rawBody, req.get('x-hub-signature-256'))) {
     return res.status(403).send('Forbidden');
+  }
+  if (!supabase) {
+    return res.status(503).send('Service not configured');
   }
 
   let payload;
