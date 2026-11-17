@@ -150,6 +150,7 @@ class TryOnImageService {
         'recipientId': recipientId.trim(),
         'imageBase64': base64Encode(imageBytes),
         'caption': caption.trim(),
+        'approved': true,
       },
       timeout: const Duration(seconds: 30),
     );

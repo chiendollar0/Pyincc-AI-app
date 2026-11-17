@@ -17,25 +17,33 @@
    - URL triển khai: `https://pyincc-ai-app.onrender.com` (cấu hình sẵn trong `render.yaml`).
    - **Xác thực & Liên kết Fanpage tự động (`/auth/facebook`, `/auth/facebook/callback`, `/auth/facebook/exchange-token`, `/connected-pages`):** Đổi `User Access Token` của chủ tiệm sang Long-Lived Token, ký `appsecret_proof` bằng `META_APP_SECRET` trên server, gọi `GET /me/accounts` lấy danh sách Fanpage kèm `page_access_token`, tự động đăng ký Webhook (`/{page_id}/subscribed_apps`) và lưu vào bảng `connected_pages` trên Supabase.
    - **Nhận sự kiện Meta (`GET /webhook`, `POST /webhook`):** Kiểm tra chữ ký `x-hub-signature-256` bằng HMAC-SHA256 trên raw body, lọc ảnh từ domain CDN hợp lệ của Facebook (`fbcdn.net`, `fbsbx.com`), tải về buffer và upload lên Supabase Storage bucket `customer-media`, ghi idempotent vào `webhook_events`, `conversation_messages`, `customer_media`.
-   - **API Hộp thư, Gửi tin, Lịch hẹn & Cấu hình (`/messages`, `/send-message`, `/send-tryon-image`, `/bookings`, `/settings`):** Phục vụ toàn bộ thao tác thực tế từ ứng dụng Flutter.
+   - **API Hộp thư, Gửi tin, Lịch hẹn & Cấu hình (`/messages`, `/send-message`, `/send-tryon-image`, `/bookings`, `/settings`):** Mọi route đọc/ghi dữ liệu vận hành hoặc gửi tin đều bắt buộc đi qua middleware xác thực `requireAuth`.
 
 3. **Supabase (`database/schema.sql` & `database/migrations/20261116_meta_webhook.sql`) + Edge Functions:**
    - **Edge Function `tryon-analyze`:** `https://ihufvqrxdswgbagzhydb.supabase.co/functions/v1/tryon-analyze` — nhận ảnh mặt khách và danh mục mẫu, gọi Gemini bằng `GEMINI_API_KEY` lưu trong Supabase Secrets (không nằm trong mã nguồn ứng dụng).
    - **PostgreSQL Tables:** `organizations`, `users`, `shifts`, `catalog_items`, `conversations`, `conversation_messages`, `customer_media`, `webhook_events`, `connected_pages`, `salon_settings`, `bookings`.
-   - **Supabase Storage:** Bucket `customer-media` lưu trữ bền vững ảnh khách gửi (`facebook/...`) và ảnh ghép mẫu AI (`tryon/...`).
+   - **Supabase Storage (`customer-media`):** Lưu trữ ảnh khách gửi (`facebook/...`) và ảnh ghép mẫu AI (`tryon/...`) ở chế độ **Private bucket**, cấp quyền truy cập tạm thời qua **Signed URL** (`createSignedUrl`, thời hạn 3600 giây).
 
 ---
 
-## 2. Trạng thái Triển khai Hiện tại
+## 2. Cơ chế Xác thực & Phân quyền theo từng Route (`backend_bridge/meta-webhook/index.js`)
 
-| Hạng mục | Trạng thái | Chi tiết |
+Mọi route thay đổi dữ liệu hoặc gửi tin cho khách hàng đều bắt buộc đi qua middleware **`requireAuth`** (yêu cầu header `Authorization: Bearer <Supabase_User_JWT_hoặc_API_KEY>` hoặc `x-api-key: <API_KEY>`). Nếu không có token hợp lệ, server trả về ngay **`401 Unauthorized`**.
+
+| Route | Phương thức | Yêu cầu Xác thực & Kiểm soát |
 | :--- | :--- | :--- |
-| **CI/CD Build APK (GitHub Actions)** | Hoàn tất (`success`) | Các run liên tiếp từ `#14` đến `#20` đều xanh, tự động kiểm tra `flutter analyze` và xuất artifact `app-debug-apk` (~70.8 MB). |
-| **Giao diện Flutter 3 Tab (`IndexedStack`)** | Hoàn tất | `Hộp thư AI`, `Studio AI`, `Quản lý Tiệm` (`Ca trực & Lịch hẹn` + `Kết nối & Chủ tiệm`), loại bỏ toàn bộ ô nhập API Key khỏi UI. |
-| **Phân tích khuôn mặt (`tryon-analyze`)** | Đã nối Supabase Edge Function | `TryOnImageService.analyzeFace()` gọi `https://ihufvqrxdswgbagzhydb.supabase.co/functions/v1/tryon-analyze`. |
-| **Gửi ảnh thử AI cho khách (`/send-tryon-image`)** | Đã nối Backend & Storage | Upload ảnh demo lên bucket `customer-media` và gửi qua Messenger Graph API kèm lời tư vấn. |
-| **Meta Webhook & Tự động đổi Page Token** | Đã triển khai trên Render | Dịch vụ `https://pyincc-ai-app.onrender.com` đã Live với `render.yaml` Blueprint. |
-| **Lịch hẹn & Cấu hình Ca trực / Kịch bản** | Đã nối Backend (`/bookings`, `/settings`) | Lưu vào bảng `bookings` và `salon_settings` trên Supabase (có fallback bộ nhớ đệm khi chưa cấu hình DB). |
+| `/health` | `GET` | Công khai — chỉ trả trạng thái `ok` và tên biến còn thiếu, không lộ giá trị bí mật. |
+| `/webhook` | `GET` | Kiểm tra `hub.mode === 'subscribe'` và `hub.verify_token === VERIFY_TOKEN`. |
+| `/webhook` | `POST` | Bắt buộc khớp chữ ký `x-hub-signature-256` (HMAC-SHA256 bằng `META_APP_SECRET` trên raw body); sai chữ ký trả `403 Forbidden`. |
+| `/auth/facebook` | `GET` | Redirect sang trang đăng nhập OAuth của Facebook. |
+| `/auth/facebook/callback` | `GET` | Đổi `code` dùng 1 lần từ Facebook OAuth sang `page_access_token` bằng `META_APP_SECRET` phía server. |
+| `/auth/facebook/exchange-token` | `POST` | **Bắt buộc `requireAuth`** (`Authorization` hoặc `x-api-key`). |
+| `/connected-pages` | `GET` | **Bắt buộc `requireAuth`** — chỉ trả `page_id`, `page_name`, không bao giờ trả `page_access_token`. |
+| `/messages` | `GET` | **Bắt buộc `requireAuth`**. |
+| `/send-message` | `POST` | **Bắt buộc `requireAuth`** + bắt buộc cờ xác nhận duyệt của nhân viên **`approved: true`** (`400 Bad Request` nếu thiếu). |
+| `/send-tryon-image` | `POST` | **Bắt buộc `requireAuth`** + bắt buộc cờ xác nhận duyệt **`approved: true`**. |
+| `/bookings` | `GET`, `POST` | **Bắt buộc `requireAuth`**. |
+| `/settings` | `GET`, `PUT` | **Bắt buộc `requireAuth`**. |
 
 ---
 
@@ -58,9 +66,9 @@ Pyincc-AI-app/
 │   └── pubspec.yaml
 ├── backend_bridge/
 │   ├── meta-webhook/
-│   │   ├── .env.example                        # Mẫu biến môi trường cho nhà phát triển trên Render
+│   │   ├── .env.example                        # Mẫu biến môi trường trên Render
 │   │   ├── README.md                           # Tài liệu API & hướng dẫn vận hành webhook
-│   │   ├── index.js                            # Express server: OAuth Facebook, Webhook HMAC, Storage, Inbox, Bookings
+│   │   ├── index.js                            # Express server: requireAuth, OAuth FB, Webhook HMAC, Signed URL
 │   │   └── package.json
 │   └── zalo-manager-bot/
 ├── database/
@@ -72,41 +80,75 @@ Pyincc-AI-app/
 
 ---
 
-## 4. Hướng dẫn Cài đặt & Vận hành (Dành cho Developer)
+## 4. Hướng dẫn Cài đặt & Cấu hình Môi trường (Dành cho Developer)
 
-### A. Khởi tạo Supabase Database & Storage
+### A. Khởi tạo Supabase Database & Private Storage Bucket
 1. Mở **Supabase SQL Editor**, chạy file [`database/schema.sql`](database/schema.sql) (nếu là project mới) hoặc [`database/migrations/20261116_meta_webhook.sql`](database/migrations/20261116_meta_webhook.sql) (nếu đã có các bảng cơ bản).
-2. Tạo Storage bucket tên **`customer-media`** (giới hạn 15 MB, cho phép `image/jpeg`, `image/png`, `image/webp`).
+2. Tạo Storage bucket **`customer-media`** ở chế độ **Private (`public = false`)**:
+   - Ảnh khuôn mặt khách hàng là dữ liệu nhạy cảm: **không bật public bucket**.
+   - Backend sử dụng `createSignedUrl(path, 3600)` để cấp đường dẫn có chữ ký và tự hết hạn sau 1 giờ.
 3. Đặt khóa Gemini cho Edge Function `tryon-analyze` trong Supabase Secrets:
    ```bash
    supabase secrets set GEMINI_API_KEY=<YOUR_GEMINI_API_KEY>
    ```
 
-### B. Cấu hình Biến môi trường trên Render (`https://pyincc-ai-app.onrender.com`)
-Nhà phát triển cấu hình một lần duy nhất trong mục **Environment** trên Render (Chủ tiệm không bao giờ phải chạm vào các biến này):
+### B. Phân loại Biến môi trường trên Render (`https://pyincc-ai-app.onrender.com`)
+
+#### 1. Nhóm Khóa Bí mật Bắt buộc (`REQUIRED SECRETS` — tuyệt đối không commit vào Git hoặc nhúng vào APK):
+- `SUPABASE_SERVICE_ROLE_KEY`: Khóa `service_role` từ Supabase Dashboard (chỉ dùng ở backend Render).
+- `META_APP_SECRET`: Khóa bí mật ứng dụng Meta để kiểm tra HMAC `x-hub-signature-256` và ký `appsecret_proof`.
+- `API_KEY`: Khóa xác thực nội bộ cho middleware `requireAuth`.
+- `VERIFY_TOKEN`: Chuỗi bí mật dùng cho bước bắt tay xác minh `GET /webhook` với Meta.
+
+#### 2. Nhóm Cấu hình Công khai / Định danh (`PUBLIC / NON-SECRET CONFIG`):
 - `SUPABASE_URL`: `https://ihufvqrxdswgbagzhydb.supabase.co`
 - `SUPABASE_STORAGE_BUCKET`: `customer-media`
 - `META_GRAPH_API_VERSION`: `v19.0`
-- `VERIFY_TOKEN`: Chuỗi xác minh Webhook với Meta for Developers
-- `API_KEY`: Khóa bảo vệ nội bộ của Server
-- `SUPABASE_SERVICE_ROLE_KEY`: Khóa `service_role` từ Supabase Dashboard
-- `META_APP_ID` & `META_APP_SECRET`: App ID và App Secret từ Meta for Developers
+- `META_APP_ID`: ID ứng dụng Meta phục vụ luồng OAuth `/auth/facebook`.
+- `DEFAULT_ORG_ID`: UUID tổ chức mặc định trong bảng `organizations` (tùy chọn).
 
 ### C. Build & Chạy Ứng dụng Flutter
 ```bash
 cd mobile_app
 flutter pub get
 flutter analyze --no-fatal-infos
-flutter run
-```
-Để xuất file APK cài đặt:
-```bash
 flutter build apk --debug
 ```
+> **Lưu ý khi dùng `--dart-define`:** Khi đóng gói APK, chỉ được truyền các địa chỉ endpoint công khai (`WEBHOOK_API_URL`, `TRYON_API_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`). Tuyệt đối không truyền `SUPABASE_SERVICE_ROLE_KEY`, `META_APP_SECRET`, hoặc `GEMINI_API_KEY` vào `--dart-define` vì mọi chuỗi trong APK đều có thể bị dịch ngược.
 
 ---
 
-## 5. Bảo mật & Quyền riêng tư
-- **Không lộ khóa ở Client:** `GEMINI_API_KEY`, `META_APP_SECRET`, `SUPABASE_SERVICE_ROLE_KEY` và `page_access_token` chỉ tồn tại trên Supabase Secrets / Render Server.
-- **Xác thực chữ ký Webhook:** Mọi sự kiện `POST /webhook` từ Meta đều được kiểm tra chữ ký `x-hub-signature-256` bằng `crypto.timingSafeEqual` trên raw request body.
-- **Kiểm soát con người (Human-in-the-loop):** AI chỉ đóng vai trò phân loại, tóm tắt và gợi ý câu trả lời/ảnh mẫu; mọi tin nhắn và hình ảnh gửi tới khách hàng đều phải được nhân viên hoặc chủ tiệm bấm xác nhận duyệt.
+## 5. Bảo mật, Xoay vòng Khóa (Key Rotation) & Kiểm thử trước Production
+
+### A. Xoay vòng & Thu hồi khóa cũ (Key Rotation) trước khi chạy Production
+Nếu bất kỳ khóa hoặc token nào từng xuất hiện trong lịch sử commit hoặc môi trường thử nghiệm trước đây, **bắt buộc thực hiện xoay vòng khóa trước khi đưa vào vận hành thật**:
+1. **Gemini API Key:** Thu hồi key cũ trong Google AI Studio, tạo key mới và cập nhật vào `supabase secrets set GEMINI_API_KEY=...`.
+2. **Supabase Service Role Key & Database Password:** Xoay vòng key trong Supabase Settings nếu từng lộ ra ngoài.
+3. **Meta App Secret & Page Access Token:** Reset `App Secret` trong Meta for Developers (việc này cũng tự động vô hiệu hóa các token cũ) và kết nối lại Fanpage qua `/auth/facebook`.
+4. **`API_KEY` & `VERIFY_TOKEN` trên Render:** Đổi sang chuỗi ngẫu nhiên mới (tối thiểu 32 ký tự) trước khi golive.
+
+### B. Danh mục Kiểm thử Bảo mật Bắt buộc trước khi dùng thật
+Chạy 3 bài kiểm thử sau để xác nhận hệ thống đã khóa chặt trước khi kết nối khách hàng thật:
+
+1. **Gọi `/send-message` không có token — Phải nhận `401 Unauthorized`:**
+   ```bash
+   curl -i -X POST "https://pyincc-ai-app.onrender.com/send-message" \
+     -H "Content-Type: application/json" \
+     -d '{"recipientId":"TEST_PSID","text":"Test","approved":true}'
+   # Kỳ vọng: HTTP/1.1 401 Unauthorized
+   ```
+
+2. **Gửi `POST /webhook` giả với chữ ký sai — Phải nhận `403 Forbidden`:**
+   ```bash
+   curl -i -X POST "https://pyincc-ai-app.onrender.com/webhook" \
+     -H "Content-Type: application/json" \
+     -H "x-hub-signature-256: sha256=0000000000000000000000000000000000000000000000000000000000000000" \
+     -d '{"object":"page","entry":[]}'
+   # Kỳ vọng: HTTP/1.1 403 Forbidden
+   ```
+
+3. **Truy cập trực tiếp ảnh trong bucket `customer-media` bằng URL công khai (không có chữ ký) — Phải bị từ chối (`400`/`403`):**
+   ```bash
+   curl -i "https://ihufvqrxdswgbagzhydb.supabase.co/storage/v1/object/public/customer-media/facebook/test.jpg"
+   # Kỳ vọng: Bị từ chối (Bucket not public / 400 / 403) khi bucket customer-media đặt ở chế độ Private.
+   ```

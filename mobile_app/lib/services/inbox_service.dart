@@ -196,6 +196,7 @@ class InboxService {
             body: jsonEncode({
               'recipientId': recipientId.trim(),
               'text': text.trim(),
+              'approved': true,
             }),
           )
           .timeout(const Duration(seconds: 20));

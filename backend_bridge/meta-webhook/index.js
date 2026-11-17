@@ -517,7 +517,13 @@ app.post('/send-tryon-image', requireAuth, express.json({ limit: '15mb' }), asyn
   const recipientId = String(req.body?.recipientId || req.body?.recipient_id || '').trim();
   const imageBase64 = String(req.body?.imageBase64 || req.body?.image_base64 || '').trim();
   const caption = String(req.body?.caption || '').trim();
+  const approved = req.body?.approved === true;
 
+  if (!approved) {
+    return res.status(400).json({
+      error: 'Human-in-the-loop approval (approved: true) is required before sending Try-On image.',
+    });
+  }
   if (!imageBase64) {
     return res.status(400).json({ error: 'imageBase64 is required' });
   }
@@ -539,8 +545,7 @@ app.post('/send-tryon-image', requireAuth, express.json({ limit: '15mb' }), asyn
     if (uploadError) {
       return res.status(502).json({ error: `Upload Try-On image failed: ${uploadError.message}` });
     }
-    const { data } = supabase.storage.from(config.storageBucket).getPublicUrl(storagePath);
-    publicUrl = data?.publicUrl || null;
+    publicUrl = await createSignedOrPublicUrl(storagePath);
 
     await supabase.from('customer_media').insert({
       source_channel: 'mobile',
@@ -669,11 +674,17 @@ app.get('/messages', requireAuth, async (req, res) => {
   }
 });
 
-// Send staff-approved reply using the stored Page Access Token on the server.
+// Parse only this endpoint as JSON; Meta signature verification uses the exact raw bytes.
 app.post('/send-message', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
   const recipientId = req.body?.recipientId || req.body?.recipient_id;
   const text = req.body?.text;
+  const approved = req.body?.approved === true;
   const requestedPageId = req.body?.pageId || req.body?.page_id;
+  if (!approved) {
+    return res.status(400).json({
+      error: 'Human-in-the-loop approval (approved: true) is required before sending.',
+    });
+  }
   if (typeof recipientId !== 'string' || !recipientId.trim() || typeof text !== 'string' || !text.trim()) {
     return res.status(400).json({ error: 'recipientId and text are required' });
   }
@@ -877,8 +888,24 @@ async function uploadImageToSupabase(remoteUrl, messageId) {
   const { error } = await uploadWithRetry(path, buffer, mimeType);
   if (error) throw new Error(`Supabase Storage upload failed: ${error.message}`);
 
+  const signedUrl = await createSignedOrPublicUrl(path);
+  return { path, publicUrl: signedUrl, mimeType, size: buffer.length };
+}
+
+async function createSignedOrPublicUrl(path, expiresInSeconds = 3600) {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase.storage
+      .from(config.storageBucket)
+      .createSignedUrl(path, expiresInSeconds);
+    if (!error && data?.signedUrl) {
+      return data.signedUrl;
+    }
+  } catch {
+    // Fallback below
+  }
   const { data } = supabase.storage.from(config.storageBucket).getPublicUrl(path);
-  return { path, publicUrl: data.publicUrl, mimeType, size: buffer.length };
+  return data?.publicUrl || null;
 }
 
 async function uploadWithRetry(path, buffer, mimeType, maxRetries = 3) {
