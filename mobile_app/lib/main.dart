@@ -16,11 +16,17 @@ class BeautyCrmApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AI Beauty Manager',
+      title: 'PYINCC AI Beauty Manager',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFD81B60)),
         useMaterial3: true,
+        cardTheme: CardThemeData(
+          elevation: 1,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
       ),
       home: const MainDashboardScreen(),
     );
@@ -57,17 +63,24 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
     defaultValue: InboxService.defaultBackendUrl,
   );
 
+  void _openTryOnTab() {
+    setState(() => _selectedIndex = 1);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final screens = <Widget>[
-      AiTriageInboxScreen(inboxService: _inboxService),
-      TryOnStudioScreen(apiBaseUrl: _tryOnApiUrl),
-      const ShiftAndBookingScreen(),
-      OwnerSettingsScreen(inboxService: _inboxService),
-    ];
-
     return Scaffold(
-      body: screens[_selectedIndex],
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: [
+          AiTriageInboxScreen(
+            inboxService: _inboxService,
+            onOpenTryOn: _openTryOnTab,
+          ),
+          TryOnStudioScreen(apiBaseUrl: _tryOnApiUrl),
+          SalonOperationsHubScreen(inboxService: _inboxService),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (index) =>
@@ -75,19 +88,18 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.forum_outlined),
+            selectedIcon: Icon(Icons.forum),
             label: 'Hộp thư AI',
           ),
           NavigationDestination(
-            icon: Icon(Icons.face_retouching_natural),
-            label: 'Thử Mày/Môi',
+            icon: Icon(Icons.face_retouching_natural_outlined),
+            selectedIcon: Icon(Icons.face_retouching_natural),
+            label: 'Studio AI',
           ),
           NavigationDestination(
-            icon: Icon(Icons.calendar_month),
-            label: 'Ca & Lịch',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.admin_panel_settings),
-            label: 'Chủ tiệm',
+            icon: Icon(Icons.storefront_outlined),
+            selectedIcon: Icon(Icons.storefront),
+            label: 'Quản lý Tiệm',
           ),
         ],
       ),
@@ -97,10 +109,12 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
 
 class AiTriageInboxScreen extends StatefulWidget {
   final InboxService inboxService;
+  final VoidCallback onOpenTryOn;
 
   const AiTriageInboxScreen({
     super.key,
     required this.inboxService,
+    required this.onOpenTryOn,
   });
 
   @override
@@ -125,7 +139,7 @@ class _AiTriageInboxScreenState extends State<AiTriageInboxScreen> {
       'id': 'demo-2',
       'psid': 'DEMO_PSID_THANH_TRUC',
       'name': 'Thanh Trúc (Zalo)',
-      'tag': 'ĐÃ THỬ MẪU MÔI',
+      'tag': 'HỎI GIÁ / ĐẶT LỊCH',
       'tagType': 'lead',
       'summary':
           'Đã chọn mẫu Môi Cam Đào #02, hỏi lịch trống chiều nay lúc 15h.',
@@ -136,6 +150,7 @@ class _AiTriageInboxScreenState extends State<AiTriageInboxScreen> {
   ];
 
   List<Map<String, dynamic>> _chats = _demoChats;
+  String _selectedFilter = 'all';
   bool _isLoading = false;
   bool _isLiveMode = false;
   String? _statusBanner;
@@ -156,6 +171,17 @@ class _AiTriageInboxScreenState extends State<AiTriageInboxScreen> {
   void dispose() {
     _pollTimer?.cancel();
     super.dispose();
+  }
+
+  List<Map<String, dynamic>> get _filteredChats {
+    if (_selectedFilter == 'all') return _chats;
+    return _chats
+        .where((c) => (c['tagType'] ?? 'normal') == _selectedFilter)
+        .toList();
+  }
+
+  int _countByType(String type) {
+    return _chats.where((c) => (c['tagType'] ?? '') == type).length;
   }
 
   Color _colorForTagType(String? tagType) {
@@ -186,7 +212,7 @@ class _AiTriageInboxScreenState extends State<AiTriageInboxScreen> {
         if (liveChats.isNotEmpty) {
           _chats = liveChats;
           _statusBanner =
-              'Đang đồng bộ trực tiếp (${liveChats.length} tin nhắn gần nhất).';
+              'Đang đồng bộ trực tiếp (${liveChats.length} hội thoại gần nhất).';
         } else {
           _chats = _demoChats;
           _statusBanner = null;
@@ -266,227 +292,365 @@ class _AiTriageInboxScreenState extends State<AiTriageInboxScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final visibleChats = _filteredChats;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sàng lọc AI (Meta & Zalo)'),
+        title: const Text('Trung tâm CSKH AI'),
         actions: [
           IconButton(
             onPressed: _isLoading ? null : () => _refreshMessages(),
             icon: const Icon(Icons.refresh),
-            tooltip: 'Làm mới hộp thư',
+            tooltip: 'Đồng bộ tin nhắn',
           ),
         ],
       ),
-      body: Column(
-        children: [
-          if (_isLoading) const LinearProgressIndicator(),
-          if (_statusBanner != null)
-            Container(
-              width: double.infinity,
-              color: _isLiveMode ? Colors.green.shade50 : Colors.amber.shade50,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Text(
-                _statusBanner!,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: _isLiveMode
-                      ? Colors.green.shade900
-                      : Colors.amber.shade900,
+      body: SafeArea(
+        child: Column(
+          children: [
+            if (_isLoading) const LinearProgressIndicator(),
+            if (_statusBanner != null)
+              Container(
+                width: double.infinity,
+                color:
+                    _isLiveMode ? Colors.green.shade50 : Colors.amber.shade50,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Text(
+                  _statusBanner!,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _isLiveMode
+                        ? Colors.green.shade900
+                        : Colors.amber.shade900,
+                  ),
                 ),
               ),
-            ),
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: _refreshMessages,
-              child: ListView.builder(
-                padding: const EdgeInsets.all(12),
-                itemCount: _chats.length,
-                itemBuilder: (context, index) {
-                  final chat = _chats[index];
-                  final tagColor =
-                      _colorForTagType(chat['tagType']?.toString());
-                  final imageUrl = (chat['imageUrl'] ?? '').toString();
-                  final chatId =
-                      (chat['id'] ?? chat['psid'] ?? '$index').toString();
-                  final isSending = _sendingIds.contains(chatId);
 
-                  return Card(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  (chat['name'] ?? 'Khách hàng').toString(),
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: tagColor.withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  (chat['tag'] ?? 'MỚI').toString(),
-                                  style: TextStyle(
-                                    color: tagColor,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Nội dung: ${chat['summary']}',
-                            style: const TextStyle(color: Colors.black87),
-                          ),
-                          if (imageUrl.isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.network(
-                                imageUrl,
-                                height: 160,
-                                width: double.infinity,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => const Text(
-                                  'Không tải được ảnh đính kèm.',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                          const Divider(),
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: Colors.pink.shade50,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  '✨ Gợi ý chốt đơn chuẩn giọng Chủ tiệm:',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12,
-                                    color: Colors.pink,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  (chat['aiSuggestion'] ?? '').toString(),
-                                  style: const TextStyle(fontSize: 13),
-                                ),
-                                const SizedBox(height: 8),
-                                Align(
-                                  alignment: Alignment.centerRight,
-                                  child: FilledButton.icon(
-                                    onPressed: isSending
-                                        ? null
-                                        : () => _editAndSend(chat),
-                                    icon: isSending
-                                        ? const SizedBox(
-                                            width: 14,
-                                            height: 14,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                            ),
-                                          )
-                                        : const Icon(Icons.send, size: 16),
-                                    label: Text(
-                                      isSending
-                                          ? 'Đang gửi...'
-                                          : 'Duyệt & Gửi cho khách',
-                                    ),
-                                  ),
-                                ),
-                              ],
+            // Thanh thống kê nhanh (KPI Strip)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: Row(
+                children: [
+                  _KpiStatBadge(
+                    label: 'Tổng hội thoại',
+                    value: '${_chats.length}',
+                    color: Colors.pink,
+                  ),
+                  const SizedBox(width: 8),
+                  _KpiStatBadge(
+                    label: 'Ca khó / Sửa',
+                    value: '${_countByType('urgent')}',
+                    color: Colors.red,
+                  ),
+                  const SizedBox(width: 8),
+                  _KpiStatBadge(
+                    label: 'Hỏi giá / Lịch',
+                    value: '${_countByType('lead')}',
+                    color: Colors.orange,
+                  ),
+                ],
+              ),
+            ),
+
+            // Bộ lọc nhanh theo phân loại AI
+            SizedBox(
+              height: 44,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [
+                  _buildFilterChip('all', 'Tất cả (${_chats.length})'),
+                  _buildFilterChip(
+                    'urgent',
+                    'Ca khó (${_countByType('urgent')})',
+                  ),
+                  _buildFilterChip(
+                    'lead',
+                    'Hỏi giá & Lịch (${_countByType('lead')})',
+                  ),
+                  _buildFilterChip(
+                    'image',
+                    'Gửi ảnh (${_countByType('image')})',
+                  ),
+                  _buildFilterChip(
+                    'replied',
+                    'Đã trả lời (${_countByType('replied')})',
+                  ),
+                ],
+              ),
+            ),
+
+            // Danh sách hội thoại
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _refreshMessages,
+                child: visibleChats.isEmpty
+                    ? ListView(
+                        children: const [
+                          SizedBox(height: 80),
+                          Center(
+                            child: Text(
+                              'Không có hội thoại nào trong mục lọc này.',
+                              style: TextStyle(color: Colors.black54),
                             ),
                           ),
                         ],
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(12),
+                        itemCount: visibleChats.length,
+                        itemBuilder: (context, index) {
+                          final chat = visibleChats[index];
+                          final tagColor =
+                              _colorForTagType(chat['tagType']?.toString());
+                          final imageUrl =
+                              (chat['imageUrl'] ?? '').toString();
+                          final chatId =
+                              (chat['id'] ?? chat['psid'] ?? '$index')
+                                  .toString();
+                          final isSending = _sendingIds.contains(chatId);
+
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          (chat['name'] ?? 'Khách hàng')
+                                              .toString(),
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 15,
+                                          ),
+                                        ),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: tagColor.withOpacity(0.15),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                        ),
+                                        child: Text(
+                                          (chat['tag'] ?? 'MỚI').toString(),
+                                          style: TextStyle(
+                                            color: tagColor,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Khách nhắn: ${chat['summary']}',
+                                    style:
+                                        const TextStyle(color: Colors.black87),
+                                  ),
+                                  if (imageUrl.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Image.network(
+                                        imageUrl,
+                                        height: 160,
+                                        width: double.infinity,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) =>
+                                            const Text(
+                                          'Không tải được ảnh đính kèm.',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                  const Divider(height: 18),
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: Colors.pink.shade50,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          '✨ Gợi ý phản hồi chuẩn giọng Chủ tiệm:',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12,
+                                            color: Colors.pink,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          (chat['aiSuggestion'] ?? '')
+                                              .toString(),
+                                          style:
+                                              const TextStyle(fontSize: 13),
+                                        ),
+                                        const SizedBox(height: 10),
+                                        Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.end,
+                                          children: [
+                                            OutlinedButton.icon(
+                                              onPressed: widget.onOpenTryOn,
+                                              icon: const Icon(
+                                                Icons.face_retouching_natural,
+                                                size: 16,
+                                              ),
+                                              label: const Text('Thử mẫu AI'),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            FilledButton.icon(
+                                              onPressed: isSending
+                                                  ? null
+                                                  : () => _editAndSend(chat),
+                                              icon: isSending
+                                                  ? const SizedBox(
+                                                      width: 14,
+                                                      height: 14,
+                                                      child:
+                                                          CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                      ),
+                                                    )
+                                                  : const Icon(
+                                                      Icons.send,
+                                                      size: 16,
+                                                    ),
+                                              label: Text(
+                                                isSending
+                                                    ? 'Đang gửi...'
+                                                    : 'Duyệt & Gửi',
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
                       ),
-                    ),
-                  );
-                },
               ),
             ),
-          ),
-        ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterChip(String value, String label) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: ChoiceChip(
+        label: Text(label),
+        selected: _selectedFilter == value,
+        onSelected: (_) => setState(() => _selectedFilter = value),
       ),
     );
   }
 }
 
-class ShiftAndBookingScreen extends StatelessWidget {
-  const ShiftAndBookingScreen({super.key});
+class _KpiStatBadge extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+
+  const _KpiStatBadge({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Ca trực & Lịch hẹn hôm nay')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          SwitchListTile(
-            title: const Text(
-              'Trạng thái Ca trực của bạn',
-              style: TextStyle(fontWeight: FontWeight.bold),
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              value,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+                color: color,
+              ),
             ),
-            subtitle: const Text(
-              'Bật để hệ thống tự động chia khách từ Meta & Zalo',
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11, color: Colors.black87),
             ),
-            value: true,
-            onChanged: (val) {},
-          ),
-          const Divider(),
-          const ListTile(
-            leading: Icon(Icons.schedule, color: Colors.pink),
-            title: Text('14:30 - Chị Lan Anh (0909xxxxxx)'),
-            subtitle: Text(
-              'Dịch vụ: Mày Hairstroke Nâu Tây • Thợ: Master Linh',
-            ),
-            trailing: Chip(label: Text('Đã chốt')),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 }
 
-class OwnerSettingsScreen extends StatefulWidget {
+/// Tab 3 gộp gọn: Ca trực & Lịch hẹn + Cấu hình Chủ tiệm & Kết nối Facebook
+class SalonOperationsHubScreen extends StatefulWidget {
   final InboxService inboxService;
 
-  const OwnerSettingsScreen({
+  const SalonOperationsHubScreen({
     super.key,
     required this.inboxService,
   });
 
   @override
-  State<OwnerSettingsScreen> createState() => _OwnerSettingsScreenState();
+  State<SalonOperationsHubScreen> createState() =>
+      _SalonOperationsHubScreenState();
 }
 
-class _OwnerSettingsScreenState extends State<OwnerSettingsScreen> {
+class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
+  int _subTab = 0; // 0: Lịch & Ca trực, 1: Chủ tiệm & Kết nối
+  bool _onDuty = true;
   List<Map<String, dynamic>> _connectedPages = const [];
   bool _isCheckingPages = false;
+
+  final List<Map<String, String>> _bookings = [
+    {
+      'time': '14:30',
+      'customer': 'Chị Lan Anh (0909xxxxxx)',
+      'service': 'Mày Hairstroke Nâu Tây • Master Linh',
+      'status': 'Đã chốt',
+    },
+    {
+      'time': '16:00',
+      'customer': 'Chị Minh Thư (FB)',
+      'service': 'Xử lý mày trổ xanh + Đi sợi • Master Linh',
+      'status': 'Chờ xác nhận',
+    },
+  ];
 
   @override
   void initState() {
@@ -504,6 +668,71 @@ class _OwnerSettingsScreenState extends State<OwnerSettingsScreen> {
       if (mounted) {
         setState(() => _isCheckingPages = false);
       }
+    }
+  }
+
+  Future<void> _addQuickBookingDialog() async {
+    final nameCtrl = TextEditingController();
+    final timeCtrl = TextEditingController(text: '17:30');
+    final serviceCtrl =
+        TextEditingController(text: 'Môi Collagen Cam Đào • Master Linh');
+
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Tạo lịch hẹn mới'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: timeCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Giờ hẹn (VD: 17:30)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Tên & SĐT khách hàng',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: serviceCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Dịch vụ & Kỹ thuật viên',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Lưu lịch hẹn'),
+          ),
+        ],
+      ),
+    );
+
+    if (created == true && nameCtrl.text.trim().isNotEmpty) {
+      setState(() {
+        _bookings.add({
+          'time': timeCtrl.text.trim(),
+          'customer': nameCtrl.text.trim(),
+          'service': serviceCtrl.text.trim(),
+          'status': 'Đã chốt',
+        });
+      });
     }
   }
 
@@ -528,7 +757,7 @@ class _OwnerSettingsScreenState extends State<OwnerSettingsScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Kết nối với Facebook'),
         content: const Text(
-          'Hệ thống sẽ chuyển sang đăng nhập Facebook của bạn và tự động liên kết Fanpage của tiệm (không cần nhập bất kỳ mã khóa nào).',
+          'Chủ tiệm chỉ cần đăng nhập tài khoản Facebook quản lý Fanpage. Máy chủ sẽ tự động lấy quyền Fanpage và đồng bộ tin nhắn mà không cần nhập bất kỳ mã khóa nào.',
         ),
         actions: [
           TextButton(
@@ -541,7 +770,7 @@ class _OwnerSettingsScreenState extends State<OwnerSettingsScreen> {
               _loadConnectedPages();
             },
             icon: const Icon(Icons.check_circle_outline),
-            label: const Text('Đã đăng nhập xong'),
+            label: const Text('Kiểm tra lại kết nối'),
           ),
         ],
       ),
@@ -550,6 +779,119 @@ class _OwnerSettingsScreenState extends State<OwnerSettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Quản lý Vận hành & Tiệm'),
+        actions: [
+          if (_subTab == 0)
+            IconButton(
+              onPressed: _addQuickBookingDialog,
+              icon: const Icon(Icons.add_alarm),
+              tooltip: 'Thêm lịch hẹn',
+            ),
+        ],
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Thanh chuyển nhánh gọn trong 1 màn hình
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _SubTabButton(
+                      selected: _subTab == 0,
+                      icon: Icons.calendar_month,
+                      label: 'Ca trực & Lịch hẹn',
+                      onTap: () => setState(() => _subTab = 0),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _SubTabButton(
+                      selected: _subTab == 1,
+                      icon: Icons.admin_panel_settings,
+                      label: 'Kết nối & Chủ tiệm',
+                      onTap: () => setState(() => _subTab = 1),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: _subTab == 0
+                  ? _buildScheduleSubView()
+                  : _buildOwnerSettingsSubView(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScheduleSubView() {
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        Card(
+          child: SwitchListTile(
+            title: const Text(
+              'Trạng thái Ca trực nhận khách AI',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Text(
+              _onDuty
+                  ? 'Đang bật: Hệ thống tự động phân khách mới từ Messenger & Zalo'
+                  : 'Đang tạm nghỉ: Chuyển khách cho nhân viên ca kế tiếp',
+            ),
+            value: _onDuty,
+            onChanged: (val) => setState(() => _onDuty = val),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Lịch hẹn hôm nay (${_bookings.length})',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            TextButton.icon(
+              onPressed: _addQuickBookingDialog,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Đặt lịch mới'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        for (final item in _bookings)
+          Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: Colors.pink.shade50,
+                child: const Icon(Icons.schedule, color: Colors.pink),
+              ),
+              title: Text(
+                '${item['time']} - ${item['customer']}',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text(item['service'] ?? ''),
+              trailing: Chip(
+                label: Text(
+                  item['status'] ?? 'Đã chốt',
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildOwnerSettingsSubView() {
     final isConnected = _connectedPages.isNotEmpty;
     final connectedLabel = isConnected
         ? _connectedPages
@@ -557,95 +899,169 @@ class _OwnerSettingsScreenState extends State<OwnerSettingsScreen> {
             .join(', ')
         : 'Chưa kết nối Fanpage';
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Chủ tiệm')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        isConnected ? Icons.verified : Icons.facebook_outlined,
+                        color: isConnected ? Colors.green : Colors.blue,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
                           isConnected
-                              ? Icons.verified
-                              : Icons.facebook_outlined,
-                          color: isConnected ? Colors.green : Colors.blue,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            isConnected
-                                ? 'Đã liên kết: $connectedLabel'
-                                : 'Liên kết Fanpage của tiệm',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
+                              ? 'Đã liên kết: $connectedLabel'
+                              : 'Kết nối Fanpage Facebook của tiệm',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Chỉ cần đăng nhập tài khoản Facebook quản lý Fanpage. Máy chủ sẽ tự động đồng bộ tin nhắn và gửi phản hồi khi bạn duyệt.',
-                      style: TextStyle(fontSize: 13, color: Colors.black87),
-                    ),
-                    const SizedBox(height: 14),
-                    FilledButton.icon(
-                      onPressed:
-                          _isCheckingPages ? null : _onTapConnectFacebook,
-                      icon: const Icon(Icons.facebook),
-                      label: Text(
-                        isConnected
-                            ? 'Làm mới kết nối Facebook'
-                            : 'Kết nối với Facebook',
                       ),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF1877F2),
-                        foregroundColor: Colors.white,
-                        minimumSize: const Size(double.infinity, 48),
-                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Chủ tiệm chỉ cần bấm nút bên dưới để đăng nhập Facebook. Hệ thống tự động lấy quyền Fanpage và bảo mật toàn bộ khóa ở máy chủ.',
+                    style: TextStyle(fontSize: 13, color: Colors.black87),
+                  ),
+                  const SizedBox(height: 14),
+                  FilledButton.icon(
+                    onPressed: _isCheckingPages ? null : _onTapConnectFacebook,
+                    icon: const Icon(Icons.facebook),
+                    label: Text(
+                      isConnected
+                          ? 'Làm mới kết nối Facebook'
+                          : 'Kết nối với Facebook',
                     ),
-                  ],
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF1877F2),
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(double.infinity, 48),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Kịch bản & Bảng giá chuẩn của Chủ tiệm:',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'AI sẽ dựa vào bảng giá và lưu ý này để soạn sẵn câu trả lời cho nhân viên duyệt.',
+                    style: TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                  const SizedBox(height: 10),
+                  const TextField(
+                    maxLines: 4,
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText:
+                          'VD: Mày sợi Hairstroke 3tr5, Môi Collagen 4tr. Ca khó sửa mày trổ xanh/đỏ cần xin ảnh cận mặt để Master lên phác đồ...',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Đã lưu kịch bản tư vấn chuẩn của Chủ tiệm!',
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.save_outlined),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 46),
+                    ),
+                    label: const Text('Lưu kịch bản & bảng giá'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SubTabButton extends StatelessWidget {
+  final bool selected;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _SubTabButton({
+    required this.selected,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color: selected
+          ? colorScheme.primaryContainer
+          : Colors.grey.shade100,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color: selected
+                    ? colorScheme.onPrimaryContainer
+                    : Colors.black54,
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight:
+                        selected ? FontWeight.bold : FontWeight.normal,
+                    fontSize: 13,
+                    color: selected
+                        ? colorScheme.onPrimaryContainer
+                        : Colors.black87,
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Kịch bản & Bảng giá để AI đóng vai Chủ tiệm:',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            const TextField(
-              maxLines: 4,
-              decoration: InputDecoration(
-                border: OutlineInputBorder(),
-                hintText:
-                    'VD: Mày sợi 3tr5, Môi collagen 4tr. Ca khó sửa mày cũ báo chủ tiệm duyệt...',
-              ),
-            ),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Đã lưu kịch bản tư vấn của Chủ tiệm!'),
-                  ),
-                );
-              },
-              style: FilledButton.styleFrom(
-                minimumSize: const Size(double.infinity, 48),
-              ),
-              child: const Text('Lưu kịch bản tư vấn'),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
