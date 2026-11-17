@@ -57,16 +57,18 @@ function hasValidJwtFormat(token) {
 
 // Middleware 1: Require authenticated Supabase User JWT (Authorization: Bearer <jwt>) for App routes
 async function requireAuth(req, res, next) {
+  if (!supabase) {
+    console.warn(JSON.stringify({ event: 'auth_unavailable', reason: 'missing_supabase_config' }));
+    return res.status(503).json({ error: 'Service Unavailable' });
+  }
+
   const authHeader = req.get('authorization') || '';
   const bearerMatch = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
   const bearerToken = bearerMatch ? bearerMatch[1].trim() : '';
 
   if (!bearerToken || !hasValidJwtFormat(bearerToken)) {
-    return res.status(401).json({ error: 'Unauthorized: missing or malformed Bearer JWT' });
-  }
-
-  if (!supabase) {
-    return res.status(401).json({ error: 'Unauthorized: authentication service unavailable' });
+    console.warn(JSON.stringify({ event: 'auth_rejected', reason: 'missing_or_malformed_jwt' }));
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
@@ -75,11 +77,12 @@ async function requireAuth(req, res, next) {
       req.authUser = data.user;
       return next();
     }
+    console.warn(JSON.stringify({ event: 'auth_rejected', reason: 'invalid_or_expired_jwt' }));
   } catch {
-    // Fall through to 401
+    console.warn(JSON.stringify({ event: 'auth_rejected', reason: 'jwt_verification_exception' }));
   }
 
-  return res.status(401).json({ error: 'Unauthorized: invalid or expired JWT' });
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 // Middleware 2: Require internal server-to-server x-api-key header matching API_KEY
@@ -88,15 +91,14 @@ function requireInternalApiKey(req, res, next) {
   if (config.apiKey && typeof headerKey === 'string' && safeEqual(headerKey, config.apiKey)) {
     return next();
   }
-  return res.status(401).json({ error: 'Unauthorized: invalid internal API key' });
+  console.warn(JSON.stringify({ event: 'internal_auth_rejected' }));
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'pyincc-meta-webhook',
-    configured: missingConfig.length === 0,
-    missing: missingConfig,
   });
 });
 
@@ -765,15 +767,16 @@ app.get('/messages', requireAuth, async (req, res) => {
 });
 
 app.post('/webhook', express.raw({ type: 'application/json', limit: '10mb' }), async (req, res) => {
+  if (!config.metaAppSecret || !supabase) {
+    console.warn(JSON.stringify({ event: 'webhook_unavailable', reason: 'missing_required_secrets' }));
+    return res.status(503).send('Service Unavailable');
+  }
   const rawBody = req.body;
   if (!Buffer.isBuffer(rawBody) || rawBody.length === 0) {
     return res.status(400).send('Missing body');
   }
-  if (!config.metaAppSecret || !verifyMetaSignature(rawBody, req.get('x-hub-signature-256'))) {
+  if (!verifyMetaSignature(rawBody, req.get('x-hub-signature-256'))) {
     return res.status(403).send('Forbidden');
-  }
-  if (!supabase) {
-    return res.status(503).send('Service not configured');
   }
 
   let payload;

@@ -120,24 +120,33 @@ Thực hiện đúng theo thứ tự 4 bước sau để không làm gián đo�
 3. **Bước 3 — Deploy & Kiểm tra hoạt động:** Chờ Render hoàn tất deploy phiên bản mới, kiểm tra `/health` và gửi thử sự kiện test để xác nhận khóa mới đã hoạt động ổn định.
 4. **Bước 4 — Thu hồi (Revoke) khóa cũ:** Chỉ sau khi bước 3 thành công mới xóa/vô hiệu hóa các khóa cũ trên Google AI Studio, Supabase và Meta.
 
-### B. Các lệnh `curl` Kiểm thử Bảo mật Thực tế
-Sử dụng trực tiếp các lệnh dưới đây để kiểm chứng bảo mật của dịch vụ:
+### B. Các lệnh `curl` Kiểm thử Bảo mật Thực tế (Chạy sau khi đã điền đủ `SUPABASE_SERVICE_ROLE_KEY` & `META_APP_SECRET` trên Render)
+Khi chưa điền `SUPABASE_SERVICE_ROLE_KEY` và `META_APP_SECRET` trên Render, các route sẽ trả về `503 Service Unavailable`. Sau khi điền đủ 2 biến này, chỉ kết luận đạt chuẩn bảo mật khi cả **4 bài kiểm thử** dưới đây trả về đúng mã HTTP kỳ vọng:
 
 ```bash
 BASE_URL="https://pyincc-ai-app.onrender.com"
 PUBLIC_BUCKET_TEST_URL="https://ihufvqrxdswgbagzhydb.supabase.co/storage/v1/object/public/customer-media/facebook/test.jpg"
 
-# 1. Gọi /send-message không có Bearer JWT -> Kết quả mong đợi: HTTP 401 Unauthorized
+# 1. Gọi /send-message với JWT giả (khi đã có SUPABASE_SERVICE_ROLE_KEY) -> Kỳ vọng: HTTP 401 {"error":"Unauthorized"}
 curl -i -X POST "$BASE_URL/send-message" \
+  -H "Authorization: Bearer invalid.token.here" \
   -H "Content-Type: application/json" \
   -d '{"messageRecordId":"00000000-0000-0000-0000-000000000000"}'
 
-# 2. Gửi POST /webhook giả với chữ ký HMAC sai -> Kết quả mong đợi: HTTP 403 Forbidden
+# 2. Gửi POST /webhook với chữ ký HMAC sai (khi đã có META_APP_SECRET) -> Kỳ vọng: HTTP 403 Forbidden
 curl -i -X POST "$BASE_URL/webhook" \
   -H "Content-Type: application/json" \
-  -H "x-hub-signature-256: sha256=0000000000000000000000000000000000000000000000000000000000000000" \
+  -H "x-hub-signature-256: sha256=0000" \
   -d '{"object":"page","entry":[]}'
 
-# 3. Truy cập trực tiếp bucket private bằng URL công khai (không có chữ ký) -> Kết quả mong đợi: HTTP 400 hoặc 403
+# 3. Gửi POST /webhook với chữ ký HMAC đúng (ký bằng META_APP_SECRET thật) -> Kỳ vọng: HTTP 200 EVENT_RECEIVED
+BODY='{"object":"page","entry":[]}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$META_APP_SECRET" | sed 's/^.* //')
+curl -i -X POST "$BASE_URL/webhook" \
+  -H "Content-Type: application/json" \
+  -H "x-hub-signature-256: sha256=$SIG" \
+  -d "$BODY"
+
+# 4. Truy cập trực tiếp bucket private bằng URL công khai (không có chữ ký) -> Kỳ vọng: HTTP 400 hoặc 403
 curl -i "$PUBLIC_BUCKET_TEST_URL"
 ```
