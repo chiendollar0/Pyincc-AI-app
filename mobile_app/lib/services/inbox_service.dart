@@ -80,7 +80,7 @@ class InboxService {
             _webhookEndpoint('/auth/facebook/exchange-token'),
             headers: _authHeaders(json: true),
             body: jsonEncode({
-              'userAccessToken': userAccessToken.trim(),
+              'accessToken': userAccessToken.trim(),
             }),
           )
           .timeout(const Duration(seconds: 20));

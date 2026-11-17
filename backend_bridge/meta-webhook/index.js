@@ -11,10 +11,7 @@ const config = {
   metaAppId: process.env.META_APP_ID,
   metaAppSecret: process.env.META_APP_SECRET,
   verifyToken: process.env.VERIFY_TOKEN,
-  pageAccessToken: process.env.PAGE_ACCESS_TOKEN,
-  pageId: process.env.PAGE_ID,
   apiKey: process.env.API_KEY,
-  orgId: process.env.DEFAULT_ORG_ID || null,
   graphApiVersion: process.env.META_GRAPH_API_VERSION || 'v19.0',
   storageBucket: process.env.SUPABASE_STORAGE_BUCKET || 'customer-media',
   publicBaseUrl: process.env.PUBLIC_BASE_URL || 'https://pyincc-ai-app.onrender.com',
@@ -40,6 +37,46 @@ const supabase = config.supabaseUrl && config.supabaseServiceRoleKey
     })
   : null;
 
+// ---------------------------------------------------------------------------
+// AES-256-GCM ENCRYPTION FOR PAGE ACCESS TOKENS AT REST
+// ---------------------------------------------------------------------------
+
+function getEncryptionKey() {
+  if (!config.metaAppSecret) {
+    throw new Error('Missing META_APP_SECRET for token encryption');
+  }
+  return crypto.createHash('sha256').update(`pyincc-page-token-key:${config.metaAppSecret}`).digest();
+}
+
+function encryptPageToken(plainToken) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getEncryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(String(plainToken), 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return `enc:v1:${iv.toString('base64')}:${authTag.toString('base64')}:${encrypted.toString('base64')}`;
+}
+
+function decryptPageToken(storedValue) {
+  const raw = String(storedValue || '');
+  if (!raw.startsWith('enc:v1:')) {
+    return raw;
+  }
+  const parts = raw.split(':');
+  if (parts.length !== 5) {
+    throw new Error('Invalid encrypted page token format');
+  }
+  const iv = Buffer.from(parts[2], 'base64');
+  const authTag = Buffer.from(parts[3], 'base64');
+  const ciphertext = Buffer.from(parts[4], 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', getEncryptionKey(), iv);
+  decipher.setAuthTag(authTag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+}
+
+// ---------------------------------------------------------------------------
+// JWT AUTHENTICATION + MULTI-TENANT MEMBERSHIP & ROLE RESOLUTION
+// ---------------------------------------------------------------------------
+
 function hasValidJwtFormat(token) {
   const parts = String(token).split('.');
   if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) return false;
@@ -55,7 +92,91 @@ function hasValidJwtFormat(token) {
   }
 }
 
-// Middleware 1: Require authenticated Supabase User JWT (Authorization: Bearer <jwt>) for App routes
+// Resolves or activates the user's membership (org_id + role) from database
+async function resolveOrActivateMembership(user) {
+  // 1. Check existing active membership for user_id
+  const { data: activeRow } = await supabase
+    .from('memberships')
+    .select('id, org_id, role, status')
+    .eq('user_id', user.id)
+    .eq('status', 'active')
+    .maybeSingle();
+
+  if (activeRow && activeRow.org_id && activeRow.role) {
+    return activeRow;
+  }
+
+  // 2. Check pending invitation matching user's email or Facebook provider_id
+  const email = typeof user.email === 'string' ? user.email.trim().toLowerCase() : '';
+  const fbUserId = String(user.user_metadata?.provider_id || user.user_metadata?.sub || '').trim();
+
+  let pendingRow = null;
+  if (email) {
+    const { data } = await supabase
+      .from('memberships')
+      .select('id, org_id, role, status')
+      .eq('invited_email', email)
+      .eq('status', 'pending')
+      .maybeSingle();
+    if (data) pendingRow = data;
+  }
+  if (!pendingRow && fbUserId) {
+    const { data } = await supabase
+      .from('memberships')
+      .select('id, org_id, role, status')
+      .eq('invited_fb_user_id', fbUserId)
+      .eq('status', 'pending')
+      .maybeSingle();
+    if (data) pendingRow = data;
+  }
+
+  if (pendingRow) {
+    const { data: activated } = await supabase
+      .from('memberships')
+      .update({
+        user_id: user.id,
+        status: 'active',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', pendingRow.id)
+      .select('id, org_id, role, status')
+      .single();
+    if (activated) return activated;
+  }
+
+  // 3. Bootstrap first owner ONLY if no organization exists yet in the database
+  const { count } = await supabase
+    .from('organizations')
+    .select('id', { count: 'exact', head: true });
+
+  if (count === 0) {
+    const { data: newOrg } = await supabase
+      .from('organizations')
+      .insert({ name: 'PYINCC Salon' })
+      .select('id')
+      .single();
+
+    if (newOrg?.id) {
+      const { data: ownerMembership } = await supabase
+        .from('memberships')
+        .insert({
+          org_id: newOrg.id,
+          user_id: user.id,
+          invited_email: email || null,
+          invited_fb_user_id: fbUserId || null,
+          role: 'owner',
+          status: 'active',
+        })
+        .select('id, org_id, role, status')
+        .single();
+      return ownerMembership || null;
+    }
+  }
+
+  return null;
+}
+
+// Middleware 1: Verify Supabase User JWT and load org_id + role from memberships table
 async function requireAuth(req, res, next) {
   if (!supabase) {
     console.warn(JSON.stringify({ event: 'auth_unavailable', reason: 'missing_supabase_config' }));
@@ -73,19 +194,38 @@ async function requireAuth(req, res, next) {
 
   try {
     const { data, error } = await supabase.auth.getUser(bearerToken);
-    if (!error && data?.user) {
-      req.authUser = data.user;
-      return next();
+    if (error || !data?.user) {
+      console.warn(JSON.stringify({ event: 'auth_rejected', reason: 'invalid_or_expired_jwt' }));
+      return res.status(401).json({ error: 'Unauthorized' });
     }
-    console.warn(JSON.stringify({ event: 'auth_rejected', reason: 'invalid_or_expired_jwt' }));
+
+    const membership = await resolveOrActivateMembership(data.user);
+    if (!membership || !membership.org_id || !membership.role) {
+      console.warn(JSON.stringify({ event: 'membership_rejected', userId: data.user.id }));
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    req.authUser = data.user;
+    req.orgId = membership.org_id;
+    req.userRole = membership.role; // 'owner' | 'staff'
+    return next();
   } catch {
     console.warn(JSON.stringify({ event: 'auth_rejected', reason: 'jwt_verification_exception' }));
+    return res.status(401).json({ error: 'Unauthorized' });
   }
-
-  return res.status(401).json({ error: 'Unauthorized' });
 }
 
-// Middleware 2: Require internal server-to-server x-api-key header matching API_KEY
+// Middleware 2: Enforce role ('owner' or 'staff') from memberships table
+function requireRole(...allowedRoles) {
+  return (req, res, next) => {
+    if (!req.userRole || !allowedRoles.includes(req.userRole)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    return next();
+  };
+}
+
+// Middleware 3: Require internal server-to-server x-api-key header matching API_KEY
 function requireInternalApiKey(req, res, next) {
   const headerKey = req.get('x-api-key');
   if (config.apiKey && typeof headerKey === 'string' && safeEqual(headerKey, config.apiKey)) {
@@ -102,7 +242,6 @@ app.get('/health', (_req, res) => {
   });
 });
 
-// Internal server-to-server status check protected by x-api-key
 app.get('/internal/status', requireInternalApiKey, (_req, res) => {
   res.json({
     ok: true,
@@ -111,99 +250,78 @@ app.get('/internal/status', requireInternalApiKey, (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// 1. FACEBOOK LOGIN & AUTOMATIC PAGE TOKEN EXCHANGE
+// 1. STAFF INVITATIONS & MEMBERSHIP MANAGEMENT (Owner only)
 // ---------------------------------------------------------------------------
 
-app.get('/auth/facebook', (req, res) => {
-  if (!config.metaAppId) {
-    return res.status(503).json({
-      error: 'META_APP_ID chưa được cấu hình trên Render server.',
-    });
-  }
-  const redirectUri = `${config.publicBaseUrl.replace(/\/+$/, '')}/auth/facebook/callback`;
-  const scopes = [
-    'pages_show_list',
-    'pages_messaging',
-    'pages_manage_metadata',
-  ].join(',');
+app.get('/memberships', requireAuth, requireRole('owner'), async (req, res) => {
+  const { data, error } = await supabase
+    .from('memberships')
+    .select('id, org_id, user_id, invited_email, invited_fb_user_id, role, status, created_at')
+    .eq('org_id', req.orgId)
+    .order('created_at', { ascending: false });
 
-  const oauthUrl = new URL(`https://www.facebook.com/${config.graphApiVersion}/dialog/oauth`);
-  oauthUrl.searchParams.set('client_id', config.metaAppId);
-  oauthUrl.searchParams.set('redirect_uri', redirectUri);
-  oauthUrl.searchParams.set('scope', scopes);
-  oauthUrl.searchParams.set('response_type', 'code');
-  if (typeof req.query.orgId === 'string' && req.query.orgId.trim()) {
-    oauthUrl.searchParams.set('state', req.query.orgId.trim());
+  if (error) {
+    return res.status(500).json({ error: 'Failed to load memberships' });
   }
-
-  return res.redirect(oauthUrl.toString());
+  return res.json({ memberships: data || [] });
 });
 
-app.get('/auth/facebook/callback', async (req, res) => {
-  const code = req.query.code;
-  const orgId = typeof req.query.state === 'string' && req.query.state.trim()
-    ? req.query.state.trim()
-    : config.orgId;
+app.post('/memberships/invite', requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), async (req, res) => {
+  const invitedEmail = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : null;
+  const invitedFbUserId = typeof req.body?.fbUserId === 'string' ? req.body.fbUserId.trim() : null;
 
-  if (typeof code !== 'string' || !code.trim()) {
-    return res.status(400).send('Thiếu mã xác thực từ Facebook.');
-  }
-  if (!config.metaAppId || !config.metaAppSecret) {
-    return res.status(503).send('Server chưa cấu hình META_APP_ID / META_APP_SECRET.');
+  if (!invitedEmail && !invitedFbUserId) {
+    return res.status(400).json({ error: 'email or fbUserId is required to invite staff' });
   }
 
-  try {
-    const redirectUri = `${config.publicBaseUrl.replace(/\/+$/, '')}/auth/facebook/callback`;
-    const tokenRes = await axios.get(
-      `https://graph.facebook.com/${config.graphApiVersion}/oauth/access_token`,
-      {
-        params: {
-          client_id: config.metaAppId,
-          client_secret: config.metaAppSecret,
-          redirect_uri: redirectUri,
-          code: code.trim(),
-        },
-        timeout: 15000,
-      }
-    );
+  // Invited members are strictly assigned 'staff' role by server
+  const { data, error } = await supabase
+    .from('memberships')
+    .insert({
+      org_id: req.orgId,
+      invited_email: invitedEmail,
+      invited_fb_user_id: invitedFbUserId,
+      role: 'staff',
+      status: 'pending',
+    })
+    .select('id, org_id, invited_email, invited_fb_user_id, role, status, created_at')
+    .single();
 
-    const shortLivedToken = tokenRes.data?.access_token;
-    if (!shortLivedToken) {
-      throw new Error('Không lấy được User Access Token từ Facebook.');
-    }
-
-    const pages = await exchangeUserTokenAndSavePages(shortLivedToken, orgId);
-    const pageNames = pages.map((p) => p.page_name).join(', ') || 'Chưa tìm thấy Fanpage';
-
-    return res.status(200).send(
-      `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kết nối thành công</title></head>` +
-      `<body style="font-family:sans-serif;padding:24px;text-align:center;">` +
-      `<h2 style="color:#d81b60;">Đã kết nối Facebook thành công!</h2>` +
-      `<p>Fanpage đã liên kết tự động: <strong>${pageNames}</strong></p>` +
-      `<p>Bạn có thể đóng cửa sổ này và quay lại ứng dụng PYINCC.</p>` +
-      `</body></html>`
-    );
-  } catch (error) {
-    console.error(JSON.stringify({ event: 'fb_oauth_callback_failed', message: error.message }));
-    return res.status(500).send('Không thể hoàn tất kết nối Facebook. Vui lòng thử lại.');
+  if (error) {
+    return res.status(500).json({ error: 'Failed to create staff invitation' });
   }
+  return res.json({ success: true, invitation: data });
 });
 
-app.post('/auth/facebook/exchange-token', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
-  if (!config.metaAppSecret) {
-    return res.status(503).json({ error: 'Server chưa cấu hình META_APP_SECRET' });
+// ---------------------------------------------------------------------------
+// 2. FACEBOOK LOGIN, DEBUG_TOKEN VERIFICATION & ENCRYPTED PAGE TOKEN STORAGE
+// ---------------------------------------------------------------------------
+
+app.post('/auth/facebook/exchange-token', requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), async (req, res) => {
+  if (!config.metaAppSecret || !config.metaAppId) {
+    return res.status(503).json({ error: 'Service Unavailable' });
   }
 
-  const userAccessToken = req.body?.userAccessToken || req.body?.user_access_token;
-  const orgId = req.body?.orgId || req.body?.org_id || config.orgId;
+  const userAccessToken = req.body?.accessToken || req.body?.userAccessToken || req.body?.user_access_token;
   if (typeof userAccessToken !== 'string' || !userAccessToken.trim()) {
-    return res.status(400).json({ error: 'userAccessToken is required' });
+    return res.status(400).json({ error: 'accessToken is required' });
   }
 
   try {
-    const pages = await exchangeUserTokenAndSavePages(userAccessToken.trim(), orgId);
+    // Verify with Facebook /debug_token that the token belongs to this META_APP_ID and is valid
+    const verifiedTokenInfo = await verifyFacebookUserToken(userAccessToken.trim());
+
+    // Exchange for long-lived token and save encrypted Page tokens bound to req.orgId (from membership)
+    const pages = await exchangeUserTokenAndSavePages(
+      userAccessToken.trim(),
+      req.orgId,
+      verifiedTokenInfo.userId
+    );
+
     return res.json({
       success: true,
+      org_id: req.orgId,
+      role: req.userRole,
       pages: pages.map((p) => ({
         page_id: p.page_id,
         page_name: p.page_name,
@@ -211,15 +329,36 @@ app.post('/auth/facebook/exchange-token', requireAuth, express.json({ limit: '16
     });
   } catch (error) {
     console.error(JSON.stringify({ event: 'exchange_token_failed', message: error.message }));
-    return res.status(502).json({ error: 'Không thể đổi Page Access Token từ Facebook' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 });
 
-app.get('/connected-pages', requireAuth, async (_req, res) => {
+// Facebook Deauthorize Callback — revokes stored Page tokens when owner removes the app on Facebook
+app.post('/auth/facebook/deauthorize', express.urlencoded({ extended: false }), express.json({ limit: '16kb' }), async (req, res) => {
+  if (!config.metaAppSecret || !supabase) {
+    return res.status(503).json({ error: 'Service Unavailable' });
+  }
+
+  const signedRequest = req.body?.signed_request;
+  const parsed = verifyFacebookSignedRequest(signedRequest);
+  if (!parsed || !parsed.user_id) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  await supabase
+    .from('connected_pages')
+    .delete()
+    .eq('connected_by_fb_user_id', String(parsed.user_id));
+
+  return res.json({ success: true });
+});
+
+app.get('/connected-pages', requireAuth, requireRole('owner', 'staff'), async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('connected_pages')
       .select('page_id, page_name, updated_at')
+      .eq('org_id', req.orgId)
       .order('updated_at', { ascending: false });
 
     if (error) {
@@ -231,7 +370,55 @@ app.get('/connected-pages', requireAuth, async (_req, res) => {
   }
 });
 
-async function exchangeUserTokenAndSavePages(userAccessToken, orgId) {
+async function verifyFacebookUserToken(inputToken) {
+  const appAccessToken = `${config.metaAppId}|${config.metaAppSecret}`;
+  const debugRes = await axios.get(
+    `https://graph.facebook.com/${config.graphApiVersion}/debug_token`,
+    {
+      params: {
+        input_token: inputToken,
+        access_token: appAccessToken,
+      },
+      timeout: 15000,
+    }
+  );
+
+  const tokenData = debugRes.data?.data;
+  if (
+    !tokenData ||
+    tokenData.is_valid !== true ||
+    String(tokenData.app_id) !== String(config.metaAppId) ||
+    !tokenData.user_id
+  ) {
+    throw new Error('Facebook token failed debug_token validation');
+  }
+
+  return {
+    userId: String(tokenData.user_id),
+    appId: String(tokenData.app_id),
+  };
+}
+
+function verifyFacebookSignedRequest(signedRequest) {
+  if (typeof signedRequest !== 'string' || !signedRequest.includes('.')) return null;
+  const [encodedSig, payload] = signedRequest.split('.', 2);
+  if (!encodedSig || !payload) return null;
+
+  const expectedSig = crypto
+    .createHmac('sha256', config.metaAppSecret)
+    .update(payload)
+    .digest('base64url');
+
+  if (!safeEqual(encodedSig, expectedSig)) return null;
+
+  try {
+    return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function exchangeUserTokenAndSavePages(userAccessToken, orgId, fbUserId) {
   let tokenToUse = userAccessToken;
 
   if (config.metaAppId && config.metaAppSecret) {
@@ -304,75 +491,61 @@ async function exchangeUserTokenAndSavePages(userAccessToken, orgId) {
       }));
     }
 
+    const encryptedToken = encryptPageToken(page.access_token);
     const row = {
-      org_id: orgId || null,
+      org_id: orgId,
       page_id: String(page.id),
       page_name: String(page.name || `Page ${page.id}`),
-      page_access_token: String(page.access_token),
+      page_access_token: encryptedToken,
+      connected_by_fb_user_id: fbUserId || null,
       updated_at: new Date().toISOString(),
     };
 
-    if (supabase) {
-      const { error } = await supabase
-        .from('connected_pages')
-        .upsert(row, { onConflict: 'page_id' });
-      if (error) {
-        console.error(JSON.stringify({ event: 'save_connected_page_failed', message: error.message }));
-      }
+    const { error } = await supabase
+      .from('connected_pages')
+      .upsert(row, { onConflict: 'page_id' });
+    if (error) {
+      throw new Error(`Could not persist connected page: ${error.message}`);
     }
 
-    config.pageId = row.page_id;
-    config.pageAccessToken = row.page_access_token;
     savedPages.push({ page_id: row.page_id, page_name: row.page_name });
   }
 
   return savedPages;
 }
 
-async function resolvePageCredentials(requestedPageId) {
-  if (supabase) {
-    try {
-      let query = supabase
-        .from('connected_pages')
-        .select('page_id, page_access_token')
-        .order('updated_at', { ascending: false })
-        .limit(1);
+async function resolvePageCredentialsForOrg(orgId, requestedPageId) {
+  let query = supabase
+    .from('connected_pages')
+    .select('page_id, page_access_token')
+    .eq('org_id', orgId)
+    .order('updated_at', { ascending: false })
+    .limit(1);
 
-      if (requestedPageId) {
-        query = query.eq('page_id', requestedPageId);
-      }
-
-      const { data } = await query;
-      if (Array.isArray(data) && data.length > 0 && data[0].page_access_token) {
-        return {
-          pageId: data[0].page_id,
-          pageAccessToken: data[0].page_access_token,
-        };
-      }
-    } catch {
-      // Fallback below
-    }
+  if (requestedPageId) {
+    query = query.eq('page_id', requestedPageId);
   }
 
-  if (config.pageId && config.pageAccessToken) {
+  const { data } = await query;
+  if (Array.isArray(data) && data.length > 0 && data[0].page_access_token) {
     return {
-      pageId: config.pageId,
-      pageAccessToken: config.pageAccessToken,
+      pageId: data[0].page_id,
+      pageAccessToken: decryptPageToken(data[0].page_access_token),
     };
   }
   return null;
 }
 
 // ---------------------------------------------------------------------------
-// 2. SALON SETTINGS & BOOKINGS (Require Supabase User JWT)
+// 3. SALON SETTINGS & BOOKINGS (Scoped by req.orgId and Role)
 // ---------------------------------------------------------------------------
 
-app.get('/settings', requireAuth, async (_req, res) => {
+app.get('/settings', requireAuth, requireRole('owner', 'staff'), async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('salon_settings')
       .select('on_duty, consultation_script, updated_at')
-      .eq('key', 'default')
+      .eq('org_id', req.orgId)
       .maybeSingle();
 
     if (error) {
@@ -388,19 +561,26 @@ app.get('/settings', requireAuth, async (_req, res) => {
   }
 });
 
-app.put('/settings', requireAuth, express.json({ limit: '32kb' }), async (req, res) => {
-  const onDuty = typeof req.body?.onDuty === 'boolean' ? req.body.onDuty : true;
-  const consultationScript = typeof req.body?.consultationScript === 'string'
-    ? req.body.consultationScript.trim()
-    : '';
+// Only 'owner' can modify consultationScript; 'staff' or 'owner' can toggle onDuty
+app.put('/settings', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '32kb' }), async (req, res) => {
+  if (typeof req.body?.consultationScript === 'string' && req.userRole !== 'owner') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
 
-  const { error } = await supabase.from('salon_settings').upsert({
-    key: 'default',
-    org_id: config.orgId,
+  const onDuty = typeof req.body?.onDuty === 'boolean' ? req.body.onDuty : true;
+  const payload = {
+    key: `org:${req.orgId}`,
+    org_id: req.orgId,
     on_duty: onDuty,
-    consultation_script: consultationScript,
     updated_at: new Date().toISOString(),
-  }, { onConflict: 'key' });
+  };
+  if (req.userRole === 'owner' && typeof req.body?.consultationScript === 'string') {
+    payload.consultation_script = req.body.consultationScript.trim();
+  }
+
+  const { error } = await supabase
+    .from('salon_settings')
+    .upsert(payload, { onConflict: 'key' });
 
   if (error) {
     return res.status(500).json({ error: 'Failed to save settings' });
@@ -409,14 +589,14 @@ app.put('/settings', requireAuth, express.json({ limit: '32kb' }), async (req, r
   return res.json({
     success: true,
     onDuty,
-    consultationScript,
   });
 });
 
-app.get('/bookings', requireAuth, async (_req, res) => {
+app.get('/bookings', requireAuth, requireRole('owner', 'staff'), async (req, res) => {
   const { data, error } = await supabase
     .from('bookings')
     .select('*')
+    .eq('org_id', req.orgId)
     .order('scheduled_at', { ascending: true })
     .limit(50);
 
@@ -427,7 +607,7 @@ app.get('/bookings', requireAuth, async (_req, res) => {
   return res.json({ bookings: data || [] });
 });
 
-app.post('/bookings', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
+app.post('/bookings', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), async (req, res) => {
   const customerName = String(req.body?.customerName || req.body?.customer_name || '').trim();
   const customerPhone = String(req.body?.customerPhone || req.body?.customer_phone || '').trim();
   const serviceName = String(req.body?.serviceName || req.body?.service_name || '').trim();
@@ -450,7 +630,7 @@ app.post('/bookings', requireAuth, express.json({ limit: '16kb' }), async (req, 
   const { data, error } = await supabase
     .from('bookings')
     .insert({
-      org_id: config.orgId,
+      org_id: req.orgId,
       customer_name: customerName,
       customer_phone: customerPhone,
       service_name: serviceName,
@@ -468,11 +648,10 @@ app.post('/bookings', requireAuth, express.json({ limit: '16kb' }), async (req, 
 });
 
 // ---------------------------------------------------------------------------
-// 3. HUMAN-IN-THE-LOOP APPROVAL & MESSAGING (Database-verified approval)
+// 4. HUMAN-IN-THE-LOOP APPROVAL & MESSAGING (Scoped by req.orgId & Role)
 // ---------------------------------------------------------------------------
 
-// Step 3A: Staff approves a reply draft in database (records approved_by & approved_at)
-app.post('/messages/:id/approve', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
+app.post('/messages/:id/approve', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), async (req, res) => {
   const messageRowId = String(req.params.id || '').trim();
   const draftReply = String(req.body?.text || req.body?.draftReply || '').trim();
 
@@ -493,18 +672,18 @@ app.post('/messages/:id/approve', requireAuth, express.json({ limit: '16kb' }), 
       approved_at: approvedAt,
     })
     .eq('id', messageRowId)
-    .select('id, customer_psid, draft_reply, approval_status, approved_by, approved_at')
+    .eq('org_id', req.orgId)
+    .select('id, org_id, customer_psid, draft_reply, approval_status, approved_by, approved_at')
     .single();
 
   if (error || !data) {
-    return res.status(404).json({ error: 'Message record not found or could not be approved' });
+    return res.status(404).json({ error: 'Message record not found in your organization' });
   }
 
   return res.json({ success: true, approval: data });
 });
 
-// Step 3B: Send message ONLY after verifying database record has approval_status === 'approved'
-app.post('/send-message', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
+app.post('/send-message', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), async (req, res) => {
   const messageRecordId = String(req.body?.messageRecordId || req.body?.message_record_id || '').trim();
   const requestedPageId = req.body?.pageId || req.body?.page_id;
 
@@ -514,15 +693,15 @@ app.post('/send-message', requireAuth, express.json({ limit: '16kb' }), async (r
     });
   }
 
-  // Read approval state directly from database — never trust body flags
   const { data: msgRecord, error: fetchErr } = await supabase
     .from('conversation_messages')
-    .select('id, customer_psid, draft_reply, approval_status, approved_by, approved_at')
+    .select('id, org_id, customer_psid, draft_reply, approval_status, approved_by, approved_at')
     .eq('id', messageRecordId)
+    .eq('org_id', req.orgId)
     .single();
 
   if (fetchErr || !msgRecord) {
-    return res.status(404).json({ error: 'Message record not found in database' });
+    return res.status(404).json({ error: 'Message record not found in your organization' });
   }
 
   if (
@@ -536,10 +715,10 @@ app.post('/send-message', requireAuth, express.json({ limit: '16kb' }), async (r
     });
   }
 
-  const pageCreds = await resolvePageCredentials(requestedPageId);
+  const pageCreds = await resolvePageCredentialsForOrg(req.orgId, requestedPageId);
   if (!pageCreds) {
     return res.status(503).json({
-      error: 'Chưa có Fanpage nào được kết nối.',
+      error: 'Chưa có Fanpage nào được kết nối cho tiệm của bạn.',
     });
   }
 
@@ -560,11 +739,12 @@ app.post('/send-message', requireAuth, express.json({ limit: '16kb' }), async (r
     await supabase
       .from('conversation_messages')
       .update({ approval_status: 'sent' })
-      .eq('id', msgRecord.id);
+      .eq('id', msgRecord.id)
+      .eq('org_id', req.orgId);
 
     const sentMessageId = response.data?.message_id || null;
     await supabase.from('conversation_messages').upsert({
-      org_id: config.orgId,
+      org_id: req.orgId,
       channel: 'facebook',
       customer_psid: String(msgRecord.customer_psid).trim(),
       sender: 'staff',
@@ -585,8 +765,7 @@ app.post('/send-message', requireAuth, express.json({ limit: '16kb' }), async (r
   }
 });
 
-// Step 3C: Create & approve Try-On image record in database, then send after verifying DB approval
-app.post('/tryon-drafts', requireAuth, express.json({ limit: '15mb' }), async (req, res) => {
+app.post('/tryon-drafts', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '15mb' }), async (req, res) => {
   const recipientId = String(req.body?.recipientId || req.body?.recipient_id || '').trim();
   const imageBase64 = String(req.body?.imageBase64 || req.body?.image_base64 || '').trim();
   const caption = String(req.body?.caption || '').trim();
@@ -605,7 +784,7 @@ app.post('/tryon-drafts', requireAuth, express.json({ limit: '15mb' }), async (r
     return res.status(400).json({ error: 'Image size must be under 15 MB' });
   }
 
-  const storagePath = `tryon/${crypto.randomUUID()}.jpg`;
+  const storagePath = `tryon/${req.orgId}/${crypto.randomUUID()}.jpg`;
   const { error: uploadError } = await uploadWithRetry(storagePath, buffer, 'image/jpeg');
   if (uploadError) {
     return res.status(502).json({ error: `Upload Try-On image failed: ${uploadError.message}` });
@@ -615,6 +794,7 @@ app.post('/tryon-drafts', requireAuth, express.json({ limit: '15mb' }), async (r
   const { data: mediaRecord, error: insertError } = await supabase
     .from('customer_media')
     .insert({
+      org_id: req.orgId,
       source_channel: 'mobile',
       source_message_id: storagePath,
       storage_path: storagePath,
@@ -628,7 +808,7 @@ app.post('/tryon-drafts', requireAuth, express.json({ limit: '15mb' }), async (r
       approved_at: approvedAt,
       uploaded_at: approvedAt,
     })
-    .select('id, storage_path, approval_status, approved_by, approved_at')
+    .select('id, org_id, storage_path, approval_status, approved_by, approved_at')
     .single();
 
   if (insertError || !mediaRecord) {
@@ -638,7 +818,7 @@ app.post('/tryon-drafts', requireAuth, express.json({ limit: '15mb' }), async (r
   return res.json({ success: true, media: mediaRecord });
 });
 
-app.post('/send-tryon-image', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
+app.post('/send-tryon-image', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), async (req, res) => {
   const mediaRecordId = String(req.body?.mediaRecordId || req.body?.media_record_id || '').trim();
   if (!mediaRecordId) {
     return res.status(400).json({
@@ -646,15 +826,15 @@ app.post('/send-tryon-image', requireAuth, express.json({ limit: '16kb' }), asyn
     });
   }
 
-  // Verify approval status, approved_by, and approved_at directly in the database
   const { data: mediaRow, error: fetchErr } = await supabase
     .from('customer_media')
-    .select('id, storage_path, recipient_psid, caption, approval_status, approved_by, approved_at')
+    .select('id, org_id, storage_path, recipient_psid, caption, approval_status, approved_by, approved_at')
     .eq('id', mediaRecordId)
+    .eq('org_id', req.orgId)
     .single();
 
   if (fetchErr || !mediaRow) {
-    return res.status(404).json({ error: 'Try-On media record not found in database' });
+    return res.status(404).json({ error: 'Try-On media record not found in your organization' });
   }
 
   if (
@@ -671,7 +851,7 @@ app.post('/send-tryon-image', requireAuth, express.json({ limit: '16kb' }), asyn
   const signedUrl = await createSignedUrl(mediaRow.storage_path, 3600);
   const recipientId = String(mediaRow.recipient_psid || '').trim();
   const caption = String(mediaRow.caption || '').trim();
-  const pageCreds = await resolvePageCredentials(req.body?.pageId);
+  const pageCreds = await resolvePageCredentialsForOrg(req.orgId, req.body?.pageId);
 
   if (recipientId && pageCreds) {
     try {
@@ -716,7 +896,8 @@ app.post('/send-tryon-image', requireAuth, express.json({ limit: '16kb' }), asyn
   await supabase
     .from('customer_media')
     .update({ approval_status: 'sent' })
-    .eq('id', mediaRow.id);
+    .eq('id', mediaRow.id)
+    .eq('org_id', req.orgId);
 
   return res.json({
     success: true,
@@ -726,7 +907,7 @@ app.post('/send-tryon-image', requireAuth, express.json({ limit: '16kb' }), asyn
 });
 
 // ---------------------------------------------------------------------------
-// 4. WEBHOOK & INBOX FETCH ENDPOINTS
+// 5. WEBHOOK & INBOX FETCH ENDPOINTS (Scoped by org_id)
 // ---------------------------------------------------------------------------
 
 app.get('/webhook', (req, res) => {
@@ -740,20 +921,16 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-app.get('/messages', requireAuth, async (req, res) => {
+app.get('/messages', requireAuth, requireRole('owner', 'staff'), async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
   try {
-    let query = supabase
+    const { data, error } = await supabase
       .from('conversation_messages')
       .select('*')
+      .eq('org_id', req.orgId)
       .order('created_at', { ascending: false })
       .limit(limit);
 
-    if (config.orgId) {
-      query = query.eq('org_id', config.orgId);
-    }
-
-    const { data, error } = await query;
     if (error) {
       console.error(JSON.stringify({ event: 'fetch_messages_failed', message: error.message }));
       return res.status(500).json({ error: 'Failed to fetch messages' });
@@ -788,15 +965,18 @@ app.post('/webhook', express.raw({ type: 'application/json', limit: '10mb' }), a
 
   try {
     for (const entry of Array.isArray(payload.entry) ? payload.entry : []) {
+      const pageId = entry.id ? String(entry.id) : null;
+      const orgId = await resolveOrgIdByPageId(pageId);
+
       for (const event of Array.isArray(entry.messaging) ? entry.messaging : []) {
         if (event.message && !event.message.is_echo) {
-          await handleFacebookMessage(event, event.message);
+          await handleFacebookMessage(orgId, event, event.message);
         }
       }
       for (const change of Array.isArray(entry.changes) ? entry.changes : []) {
         const value = change.value || {};
         for (const message of Array.isArray(value.messages) ? value.messages : []) {
-          await handleFacebookMessage(value, message);
+          await handleFacebookMessage(orgId, value, message);
         }
       }
     }
@@ -807,6 +987,16 @@ app.post('/webhook', express.raw({ type: 'application/json', limit: '10mb' }), a
 
   return res.status(200).send('EVENT_RECEIVED');
 });
+
+async function resolveOrgIdByPageId(pageId) {
+  if (!pageId || !supabase) return null;
+  const { data } = await supabase
+    .from('connected_pages')
+    .select('org_id')
+    .eq('page_id', pageId)
+    .maybeSingle();
+  return data?.org_id || null;
+}
 
 function safeEqual(received, expected) {
   if (typeof received !== 'string' || typeof expected !== 'string') return false;
@@ -821,7 +1011,7 @@ function verifyMetaSignature(rawBody, signature) {
   return safeEqual(signature, expected);
 }
 
-async function handleFacebookMessage(event, message) {
+async function handleFacebookMessage(orgId, event, message) {
   const messageId = message.mid || message.id || null;
   const senderPsid = message.from?.id || event.sender?.id || 'unknown';
   const attachment = Array.isArray(message.attachments) ? message.attachments[0] : null;
@@ -855,7 +1045,7 @@ async function handleFacebookMessage(event, message) {
   if (eventError) throw new Error(`Could not persist webhook event: ${eventError.message}`);
 
   const { error: messageError } = await supabase.from('conversation_messages').upsert({
-    org_id: config.orgId,
+    org_id: orgId,
     channel: 'facebook',
     customer_psid: senderPsid,
     sender: 'customer',
@@ -873,6 +1063,7 @@ async function handleFacebookMessage(event, message) {
 
   if (uploaded) {
     const { error: mediaError } = await supabase.from('customer_media').upsert({
+      org_id: orgId,
       source_channel: 'facebook',
       source_message_id: messageId,
       source_url: null,
@@ -922,7 +1113,6 @@ async function uploadImageToSupabase(remoteUrl, messageId) {
   return { path, signedUrl, mimeType, size: buffer.length };
 }
 
-// Strictly generates a temporary Signed URL for private bucket objects (never falls back to public URL)
 async function createSignedUrl(path, expiresInSeconds = 3600) {
   if (!supabase) {
     throw new Error('Supabase client is not initialized');

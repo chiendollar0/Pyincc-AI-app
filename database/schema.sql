@@ -63,6 +63,7 @@ create table conversation_messages (
 
 create table customer_media (
   id uuid primary key default gen_random_uuid(),
+  org_id uuid references organizations(id) on delete cascade,
   source_channel text check (source_channel in ('facebook','zalo','mobile')) default 'facebook',
   source_message_id text,
   source_url text,
@@ -110,6 +111,22 @@ create table salon_settings (
   consultation_script text not null default '',
   updated_at timestamptz default now()
 );
+
+create table memberships (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references organizations(id) on delete cascade,
+  user_id uuid,
+  invited_email text,
+  invited_fb_user_id text,
+  role text not null check (role in ('owner','staff')),
+  status text not null default 'pending' check (status in ('pending','active','revoked')),
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create unique index if not exists memberships_org_user_uidx
+  on memberships (org_id, user_id)
+  where user_id is not null;
 
 create table bookings (
   id uuid primary key default gen_random_uuid(),

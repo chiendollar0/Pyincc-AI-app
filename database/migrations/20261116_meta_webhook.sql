@@ -54,6 +54,25 @@ create table if not exists public.salon_settings (
   updated_at timestamptz default now()
 );
 
+create table if not exists public.memberships (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organizations(id) on delete cascade,
+  user_id uuid,
+  invited_email text,
+  invited_fb_user_id text,
+  role text not null check (role in ('owner','staff')),
+  status text not null default 'pending' check (status in ('pending','active','revoked')),
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create unique index if not exists memberships_org_user_uidx
+  on public.memberships (org_id, user_id)
+  where user_id is not null;
+
+alter table public.customer_media
+  add column if not exists org_id uuid references public.organizations(id) on delete cascade;
+
 create or replace function public.touch_conversation_updated_at()
 returns trigger as $$
 begin
