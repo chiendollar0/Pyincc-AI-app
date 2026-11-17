@@ -10,10 +10,14 @@ import '../../services/tryon_image_service.dart';
 
 class TryOnStudioScreen extends StatefulWidget {
   final String apiBaseUrl;
+  final String? customerPsid;
+  final String? customerName;
 
   const TryOnStudioScreen({
     super.key,
     required this.apiBaseUrl,
+    this.customerPsid,
+    this.customerName,
   });
 
   @override
@@ -149,6 +153,95 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('$e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
+    }
+  }
+
+  Future<void> _approveAndSendToCustomer() async {
+    final bytes = _aiResultBytes;
+    final item = _selectedItem;
+    if (bytes == null || item == null) return;
+
+    final psidCtrl = TextEditingController(
+      text: widget.customerPsid ?? '',
+    );
+    final captionCtrl = TextEditingController(
+      text:
+          'Dạ em gửi chị xem trước ảnh ghép mẫu ${item['name']} (${item['price']}) bên em nhé ạ!',
+    );
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          widget.customerName != null
+              ? 'Duyệt & gửi ảnh cho ${widget.customerName}'
+              : 'Duyệt & gửi ảnh thử cho khách',
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: psidCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Mã khách hàng (PSID / trống nếu chỉ lưu hồ sơ)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: captionCtrl,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Lời nhắn gửi kèm ảnh',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            icon: const Icon(Icons.send, size: 16),
+            label: const Text('Xác nhận gửi'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _isBusy = true);
+    try {
+      final service = TryOnImageService(apiBaseUrl: widget.apiBaseUrl);
+      final result = await service.sendApprovedPreview(
+        imageBytes: bytes,
+        recipientId: psidCtrl.text,
+        caption: captionCtrl.text,
+      );
+      if (!mounted) return;
+      final delivered = result['deliveredToMessenger'] == true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            delivered
+                ? 'Đã tải ảnh lên Supabase và gửi qua Messenger cho khách!'
+                : 'Đã lưu ảnh demo lên máy chủ thành công!',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi gửi ảnh: $e')),
       );
     } finally {
       if (mounted) setState(() => _isBusy = false);
@@ -383,17 +476,9 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: FilledButton.icon(
-                      onPressed: _aiResultBytes == null
+                      onPressed: (_aiResultBytes == null || _isBusy)
                           ? null
-                          : () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
-                                    'Đã lưu ảnh demo vào hồ sơ tư vấn khách!',
-                                  ),
-                                ),
-                              );
-                            },
+                          : _approveAndSendToCustomer,
                       icon: const Icon(Icons.check_circle_outline, size: 18),
                       label: const Text('Duyệt gửi khách'),
                     ),

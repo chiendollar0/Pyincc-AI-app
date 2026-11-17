@@ -188,6 +188,136 @@ class InboxService {
     }
   }
 
+  Future<Map<String, dynamic>> fetchSettings() async {
+    if (!hasWebhookConfig) {
+      return const {
+        'onDuty': true,
+        'consultationScript': '',
+      };
+    }
+    try {
+      final response = await http
+          .get(_webhookEndpoint('/settings'))
+          .timeout(const Duration(seconds: 12));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+      }
+    } catch (_) {
+      // Fallback below
+    }
+    return const {
+      'onDuty': true,
+      'consultationScript': '',
+    };
+  }
+
+  Future<void> saveSettings({
+    bool? onDuty,
+    String? consultationScript,
+  }) async {
+    final payload = <String, dynamic>{};
+    if (onDuty != null) payload['onDuty'] = onDuty;
+    if (consultationScript != null) {
+      payload['consultationScript'] = consultationScript.trim();
+    }
+
+    late final http.Response response;
+    try {
+      response = await http
+          .put(
+            _webhookEndpoint('/settings'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 15));
+    } on SocketException catch (e) {
+      throw Exception('Không kết nối được máy chủ để lưu cấu hình: $e');
+    }
+
+    if (response.statusCode != 200) {
+      throw Exception('Lưu cấu hình thất bại (HTTP ${response.statusCode}).');
+    }
+  }
+
+  Future<List<Map<String, String>>> fetchBookings() async {
+    if (!hasWebhookConfig) return const [];
+    try {
+      final response = await http
+          .get(_webhookEndpoint('/bookings'))
+          .timeout(const Duration(seconds: 12));
+      if (response.statusCode != 200) return const [];
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic> && decoded['bookings'] is List) {
+        final rawList = decoded['bookings'] as List;
+        return rawList.whereType<Map<String, dynamic>>().map((row) {
+          final rawTime = (row['scheduled_at'] ?? '').toString();
+          String formattedTime = rawTime;
+          final parsed = DateTime.tryParse(rawTime);
+          if (parsed != null) {
+            final local = parsed.toLocal();
+            final hh = local.hour.toString().padLeft(2, '0');
+            final mm = local.minute.toString().padLeft(2, '0');
+            formattedTime = '$hh:$mm';
+          }
+          final phone = (row['customer_phone'] ?? '').toString().trim();
+          final name = (row['customer_name'] ?? 'Khách hàng').toString().trim();
+          final statusRaw = (row['status'] ?? 'confirmed').toString();
+          final statusLabel = statusRaw == 'pending'
+              ? 'Chờ xác nhận'
+              : statusRaw == 'done'
+                  ? 'Hoàn thành'
+                  : 'Đã chốt';
+          return <String, String>{
+            'time': formattedTime,
+            'customer': phone.isNotEmpty ? '$name ($phone)' : name,
+            'service': (row['service_name'] ?? '').toString(),
+            'status': statusLabel,
+          };
+        }).toList();
+      }
+      return const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<Map<String, String>> createBooking({
+    required String time,
+    required String customerName,
+    required String serviceName,
+  }) async {
+    late final http.Response response;
+    try {
+      response = await http
+          .post(
+            _webhookEndpoint('/bookings'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'time': time.trim(),
+              'customerName': customerName.trim(),
+              'serviceName': serviceName.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+    } on SocketException catch (e) {
+      throw Exception('Không kết nối được máy chủ để lưu lịch hẹn: $e');
+    }
+
+    if (response.statusCode != 200) {
+      throw Exception('Lưu lịch hẹn thất bại (HTTP ${response.statusCode}).');
+    }
+
+    return <String, String>{
+      'time': time.trim(),
+      'customer': customerName.trim(),
+      'service': serviceName.trim(),
+      'status': 'Đã chốt',
+    };
+  }
+
   Map<String, dynamic> _mapRowToTriageItem(Map<String, dynamic> row) {
     final psid = (row['customer_psid'] ?? 'unknown').toString();
     final channel = (row['channel'] ?? 'facebook').toString().toUpperCase();

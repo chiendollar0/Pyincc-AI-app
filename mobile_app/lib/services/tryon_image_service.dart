@@ -117,4 +117,24 @@ class TryOnImageService {
       throw Exception('Ảnh backend trả về không hợp lệ: $e');
     }
   }
+
+  Future<Map<String, dynamic>> sendApprovedPreview({
+    required Uint8List imageBytes,
+    required String recipientId,
+    required String caption,
+  }) async {
+    if (imageBytes.isEmpty) {
+      throw Exception('Chưa có ảnh ghép AI để gửi.');
+    }
+
+    return _postJson(
+      path: '/send-tryon-image',
+      body: {
+        'recipientId': recipientId.trim(),
+        'imageBase64': base64Encode(imageBytes),
+        'caption': caption.trim(),
+      },
+      timeout: const Duration(seconds: 30),
+    );
+  }
 }

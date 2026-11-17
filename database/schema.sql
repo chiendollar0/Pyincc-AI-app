@@ -94,6 +94,14 @@ create table connected_pages (
   updated_at timestamptz default now()
 );
 
+create table salon_settings (
+  key text primary key,
+  org_id uuid references organizations(id) on delete cascade,
+  on_duty boolean not null default true,
+  consultation_script text not null default '',
+  updated_at timestamptz default now()
+);
+
 create table bookings (
   id uuid primary key default gen_random_uuid(),
   org_id uuid references organizations(id) on delete cascade,

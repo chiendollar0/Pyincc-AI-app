@@ -337,7 +337,290 @@ async function resolvePageCredentials(requestedPageId) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. WEBHOOK & MESSAGING ENDPOINTS
+// 2. SALON SETTINGS, BOOKINGS & TRY-ON DELIVERY ENDPOINTS
+// ---------------------------------------------------------------------------
+
+const memoryStore = {
+  onDuty: true,
+  consultationScript:
+    'Mày sợi Hairstroke 3tr5, Môi Collagen 4tr. Ca khó sửa mày trổ xanh/đỏ cần xin ảnh cận mặt để Master lên phác đồ.',
+  bookings: [
+    {
+      id: 'default-1',
+      customer_name: 'Chị Lan Anh',
+      customer_phone: '0909xxxxxx',
+      service_name: 'Mày Hairstroke Nâu Tây • Master Linh',
+      scheduled_at: '14:30',
+      status: 'confirmed',
+    },
+    {
+      id: 'default-2',
+      customer_name: 'Chị Minh Thư (FB)',
+      customer_phone: '',
+      service_name: 'Xử lý mày trổ xanh + Đi sợi • Master Linh',
+      scheduled_at: '16:00',
+      status: 'pending',
+    },
+  ],
+};
+
+app.get('/settings', async (req, res) => {
+  if (!isAuthorizedClient(req)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('salon_settings')
+        .select('on_duty, consultation_script, updated_at')
+        .eq('key', 'default')
+        .maybeSingle();
+      if (!error && data) {
+        memoryStore.onDuty = Boolean(data.on_duty);
+        memoryStore.consultationScript = String(data.consultation_script || '');
+        return res.json({
+          onDuty: memoryStore.onDuty,
+          consultationScript: memoryStore.consultationScript,
+          persisted: true,
+        });
+      }
+    } catch {
+      // Fallback to memoryStore
+    }
+  }
+  return res.json({
+    onDuty: memoryStore.onDuty,
+    consultationScript: memoryStore.consultationScript,
+    persisted: Boolean(supabase),
+  });
+});
+
+app.put('/settings', express.json({ limit: '32kb' }), async (req, res) => {
+  if (!isAuthorizedClient(req)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (typeof req.body?.onDuty === 'boolean') {
+    memoryStore.onDuty = req.body.onDuty;
+  }
+  if (typeof req.body?.consultationScript === 'string') {
+    memoryStore.consultationScript = req.body.consultationScript.trim();
+  }
+
+  if (supabase) {
+    try {
+      const { error } = await supabase.from('salon_settings').upsert({
+        key: 'default',
+        org_id: config.orgId,
+        on_duty: memoryStore.onDuty,
+        consultation_script: memoryStore.consultationScript,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'key' });
+      if (error) {
+        console.warn(JSON.stringify({ event: 'save_settings_db_warning', message: error.message }));
+      }
+    } catch (e) {
+      console.warn(JSON.stringify({ event: 'save_settings_exception', message: e.message }));
+    }
+  }
+
+  return res.json({
+    success: true,
+    onDuty: memoryStore.onDuty,
+    consultationScript: memoryStore.consultationScript,
+  });
+});
+
+app.get('/bookings', async (req, res) => {
+  if (!isAuthorizedClient(req)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('bookings')
+        .select('*')
+        .order('scheduled_at', { ascending: true })
+        .limit(50);
+      if (!error && Array.isArray(data) && data.length > 0) {
+        return res.json({ bookings: data });
+      }
+    } catch {
+      // Fallback to memoryStore
+    }
+  }
+  return res.json({ bookings: memoryStore.bookings });
+});
+
+app.post('/bookings', express.json({ limit: '16kb' }), async (req, res) => {
+  if (!isAuthorizedClient(req)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const customerName = String(req.body?.customerName || req.body?.customer_name || '').trim();
+  const customerPhone = String(req.body?.customerPhone || req.body?.customer_phone || '').trim();
+  const serviceName = String(req.body?.serviceName || req.body?.service_name || '').trim();
+  const timeSlot = String(req.body?.time || req.body?.scheduled_at || '').trim();
+
+  if (!customerName || !serviceName) {
+    return res.status(400).json({ error: 'customerName and serviceName are required' });
+  }
+
+  let scheduledIso = new Date().toISOString();
+  const timeMatch = /^(\d{1,2}):(\d{2})$/.exec(timeSlot);
+  if (timeMatch) {
+    const now = new Date();
+    now.setHours(Number(timeMatch[1]), Number(timeMatch[2]), 0, 0);
+    scheduledIso = now.toISOString();
+  } else if (timeSlot && !Number.isNaN(Date.parse(timeSlot))) {
+    scheduledIso = new Date(timeSlot).toISOString();
+  }
+
+  const bookingRow = {
+    org_id: config.orgId,
+    customer_name: customerName,
+    customer_phone: customerPhone,
+    service_name: serviceName,
+    scheduled_at: scheduledIso,
+    status: 'confirmed',
+  };
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('bookings')
+        .insert(bookingRow)
+        .select('*')
+        .single();
+      if (!error && data) {
+        memoryStore.bookings.unshift(data);
+        return res.json({ success: true, booking: data });
+      }
+    } catch (e) {
+      console.warn(JSON.stringify({ event: 'insert_booking_warning', message: e.message }));
+    }
+  }
+
+  const fallbackRow = {
+    id: crypto.randomUUID(),
+    ...bookingRow,
+    scheduled_at: timeSlot || scheduledIso,
+  };
+  memoryStore.bookings.unshift(fallbackRow);
+  return res.json({ success: true, booking: fallbackRow });
+});
+
+app.post('/send-tryon-image', express.json({ limit: '15mb' }), async (req, res) => {
+  if (!isAuthorizedClient(req)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const recipientId = String(req.body?.recipientId || req.body?.recipient_id || '').trim();
+  const imageBase64 = String(req.body?.imageBase64 || req.body?.image_base64 || '').trim();
+  const caption = String(req.body?.caption || '').trim();
+
+  if (!imageBase64) {
+    return res.status(400).json({ error: 'imageBase64 is required' });
+  }
+
+  let buffer;
+  try {
+    buffer = Buffer.from(imageBase64, 'base64');
+  } catch {
+    return res.status(400).json({ error: 'Invalid base64 image' });
+  }
+  if (!buffer.length || buffer.length > 15 * 1024 * 1024) {
+    return res.status(400).json({ error: 'Image size must be under 15 MB' });
+  }
+
+  let publicUrl = null;
+  const storagePath = `tryon/${crypto.randomUUID()}.jpg`;
+  if (supabase) {
+    const { error: uploadError } = await uploadWithRetry(storagePath, buffer, 'image/jpeg');
+    if (uploadError) {
+      return res.status(502).json({ error: `Upload Try-On image failed: ${uploadError.message}` });
+    }
+    const { data } = supabase.storage.from(config.storageBucket).getPublicUrl(storagePath);
+    publicUrl = data?.publicUrl || null;
+
+    await supabase.from('customer_media').insert({
+      source_channel: 'mobile',
+      source_message_id: storagePath,
+      storage_url: publicUrl,
+      storage_path: storagePath,
+      file_name: storagePath,
+      mime_type: 'image/jpeg',
+      file_size: buffer.length,
+      uploaded_at: new Date().toISOString(),
+    });
+  }
+
+  // If recipientId is a real Facebook PSID and a Page is connected, send via Messenger Graph API
+  const pageCreds = await resolvePageCredentials(req.body?.pageId);
+  const isRealPsid = recipientId && !recipientId.startsWith('DEMO_');
+  if (isRealPsid && pageCreds && publicUrl) {
+    try {
+      await axios.post(
+        `https://graph.facebook.com/${config.graphApiVersion}/${pageCreds.pageId}/messages`,
+        {
+          recipient: { id: recipientId },
+          messaging_type: 'RESPONSE',
+          message: {
+            attachment: {
+              type: 'image',
+              payload: { url: publicUrl, is_reusable: true },
+            },
+          },
+        },
+        {
+          headers: { Authorization: `Bearer ${pageCreds.pageAccessToken}` },
+          timeout: 20000,
+        }
+      );
+
+      if (caption) {
+        await axios.post(
+          `https://graph.facebook.com/${config.graphApiVersion}/${pageCreds.pageId}/messages`,
+          {
+            recipient: { id: recipientId },
+            messaging_type: 'RESPONSE',
+            message: { text: caption },
+          },
+          {
+            headers: { Authorization: `Bearer ${pageCreds.pageAccessToken}` },
+            timeout: 15000,
+          }
+        );
+      }
+    } catch (err) {
+      console.error(JSON.stringify({ event: 'send_tryon_messenger_failed', status: err.response?.status }));
+      return res.status(502).json({ error: 'Không gửi được ảnh qua Messenger cho khách.' });
+    }
+  }
+
+  if (supabase && recipientId) {
+    await supabase.from('conversation_messages').insert({
+      org_id: config.orgId,
+      channel: 'facebook',
+      customer_psid: recipientId,
+      sender: 'staff',
+      message_type: 'image',
+      message_text: caption || 'Đã gửi ảnh ghép mẫu AI',
+      image_url: publicUrl,
+      attachment_type: 'image',
+      attachment_url: publicUrl,
+      is_from_customer: false,
+      created_at: new Date().toISOString(),
+    });
+  }
+
+  return res.json({
+    success: true,
+    imageUrl: publicUrl,
+    deliveredToMessenger: Boolean(isRealPsid && pageCreds && publicUrl),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. WEBHOOK & MESSAGING ENDPOINTS
 // ---------------------------------------------------------------------------
 
 // Meta webhook subscription verification handshake.

@@ -37,6 +37,14 @@ create table if not exists public.connected_pages (
   updated_at timestamptz default now()
 );
 
+create table if not exists public.salon_settings (
+  key text primary key,
+  org_id uuid references public.organizations(id) on delete cascade,
+  on_duty boolean not null default true,
+  consultation_script text not null default '',
+  updated_at timestamptz default now()
+);
+
 create or replace function public.touch_conversation_updated_at()
 returns trigger as $$
 begin

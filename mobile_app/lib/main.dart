@@ -63,8 +63,15 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
     defaultValue: InboxService.defaultBackendUrl,
   );
 
-  void _openTryOnTab() {
-    setState(() => _selectedIndex = 1);
+  String? _activeTryOnPsid;
+  String? _activeTryOnCustomerName;
+
+  void _openTryOnTab({String? psid, String? customerName}) {
+    setState(() {
+      _activeTryOnPsid = psid;
+      _activeTryOnCustomerName = customerName;
+      _selectedIndex = 1;
+    });
   }
 
   @override
@@ -77,7 +84,11 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
             inboxService: _inboxService,
             onOpenTryOn: _openTryOnTab,
           ),
-          TryOnStudioScreen(apiBaseUrl: _tryOnApiUrl),
+          TryOnStudioScreen(
+            apiBaseUrl: _tryOnApiUrl,
+            customerPsid: _activeTryOnPsid,
+            customerName: _activeTryOnCustomerName,
+          ),
           SalonOperationsHubScreen(inboxService: _inboxService),
         ],
       ),
@@ -109,7 +120,7 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
 
 class AiTriageInboxScreen extends StatefulWidget {
   final InboxService inboxService;
-  final VoidCallback onOpenTryOn;
+  final void Function({String? psid, String? customerName}) onOpenTryOn;
 
   const AiTriageInboxScreen({
     super.key,
@@ -511,7 +522,14 @@ class _AiTriageInboxScreenState extends State<AiTriageInboxScreen> {
                                               MainAxisAlignment.end,
                                           children: [
                                             OutlinedButton.icon(
-                                              onPressed: widget.onOpenTryOn,
+                                              onPressed: () =>
+                                                  widget.onOpenTryOn(
+                                                psid: (chat['psid'] ?? '')
+                                                    .toString(),
+                                                customerName:
+                                                    (chat['name'] ?? '')
+                                                        .toString(),
+                                              ),
                                               icon: const Icon(
                                                 Icons.face_retouching_natural,
                                                 size: 16,
@@ -634,10 +652,12 @@ class SalonOperationsHubScreen extends StatefulWidget {
 class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
   int _subTab = 0; // 0: Lịch & Ca trực, 1: Chủ tiệm & Kết nối
   bool _onDuty = true;
+  bool _isSavingSettings = false;
   List<Map<String, dynamic>> _connectedPages = const [];
   bool _isCheckingPages = false;
+  final TextEditingController _scriptController = TextEditingController();
 
-  final List<Map<String, String>> _bookings = [
+  List<Map<String, String>> _bookings = [
     {
       'time': '14:30',
       'customer': 'Chị Lan Anh (0909xxxxxx)',
@@ -656,6 +676,68 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
   void initState() {
     super.initState();
     _loadConnectedPages();
+    _loadOperationalData();
+  }
+
+  @override
+  void dispose() {
+    _scriptController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadOperationalData() async {
+    final settings = await widget.inboxService.fetchSettings();
+    final remoteBookings = await widget.inboxService.fetchBookings();
+    if (!mounted) return;
+    setState(() {
+      if (settings['onDuty'] is bool) {
+        _onDuty = settings['onDuty'] as bool;
+      }
+      final script = (settings['consultationScript'] ?? '').toString().trim();
+      if (script.isNotEmpty && _scriptController.text.isEmpty) {
+        _scriptController.text = script;
+      }
+      if (remoteBookings.isNotEmpty) {
+        _bookings = remoteBookings;
+      }
+    });
+  }
+
+  Future<void> _toggleDutyStatus(bool value) async {
+    setState(() => _onDuty = value);
+    try {
+      await widget.inboxService.saveSettings(onDuty: value);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi đồng bộ ca trực: $e')),
+      );
+    }
+  }
+
+  Future<void> _saveConsultationScript() async {
+    setState(() => _isSavingSettings = true);
+    try {
+      await widget.inboxService.saveSettings(
+        onDuty: _onDuty,
+        consultationScript: _scriptController.text,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Đã lưu kịch bản & bảng giá lên máy chủ!'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isSavingSettings = false);
+      }
+    }
   }
 
   Future<void> _loadConnectedPages() async {
@@ -725,14 +807,23 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
     );
 
     if (created == true && nameCtrl.text.trim().isNotEmpty) {
-      setState(() {
-        _bookings.add({
-          'time': timeCtrl.text.trim(),
-          'customer': nameCtrl.text.trim(),
-          'service': serviceCtrl.text.trim(),
-          'status': 'Đã chốt',
-        });
-      });
+      try {
+        final saved = await widget.inboxService.createBooking(
+          time: timeCtrl.text.trim(),
+          customerName: nameCtrl.text.trim(),
+          serviceName: serviceCtrl.text.trim(),
+        );
+        if (!mounted) return;
+        setState(() => _bookings.insert(0, saved));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Đã lưu lịch hẹn lên máy chủ!')),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$e')),
+        );
+      }
     }
   }
 
@@ -847,7 +938,7 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
                   : 'Đang tạm nghỉ: Chuyển khách cho nhân viên ca kế tiếp',
             ),
             value: _onDuty,
-            onChanged: (val) => setState(() => _onDuty = val),
+            onChanged: _toggleDutyStatus,
           ),
         ),
         const SizedBox(height: 12),
@@ -974,9 +1065,10 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
                     style: TextStyle(fontSize: 12, color: Colors.black54),
                   ),
                   const SizedBox(height: 10),
-                  const TextField(
+                  TextField(
+                    controller: _scriptController,
                     maxLines: 4,
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       border: OutlineInputBorder(),
                       hintText:
                           'VD: Mày sợi Hairstroke 3tr5, Môi Collagen 4tr. Ca khó sửa mày trổ xanh/đỏ cần xin ảnh cận mặt để Master lên phác đồ...',
@@ -984,20 +1076,17 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
                   ),
                   const SizedBox(height: 12),
                   FilledButton.icon(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Đã lưu kịch bản tư vấn chuẩn của Chủ tiệm!',
-                          ),
-                        ),
-                      );
-                    },
+                    onPressed:
+                        _isSavingSettings ? null : _saveConsultationScript,
                     icon: const Icon(Icons.save_outlined),
                     style: FilledButton.styleFrom(
                       minimumSize: const Size(double.infinity, 46),
                     ),
-                    label: const Text('Lưu kịch bản & bảng giá'),
+                    label: Text(
+                      _isSavingSettings
+                          ? 'Đang lưu...'
+                          : 'Lưu kịch bản & bảng giá',
+                    ),
                   ),
                 ],
               ),
