@@ -40,20 +40,33 @@ const supabase = config.supabaseUrl && config.supabaseServiceRoleKey
     })
   : null;
 
+function hasValidJwtFormat(token) {
+  const parts = String(token).split('.');
+  if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) return false;
+  try {
+    const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    if (!header || typeof header !== 'object' || !header.alg) return false;
+    if (!payload || typeof payload !== 'object' || typeof payload.sub !== 'string') return false;
+    if (typeof payload.exp === 'number' && payload.exp * 1000 <= Date.now()) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Middleware 1: Require authenticated Supabase User JWT (Authorization: Bearer <jwt>) for App routes
 async function requireAuth(req, res, next) {
   const authHeader = req.get('authorization') || '';
   const bearerMatch = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
   const bearerToken = bearerMatch ? bearerMatch[1].trim() : '';
 
-  if (!bearerToken) {
-    return res.status(401).json({ error: 'Unauthorized: missing Bearer JWT' });
+  if (!bearerToken || !hasValidJwtFormat(bearerToken)) {
+    return res.status(401).json({ error: 'Unauthorized: missing or malformed Bearer JWT' });
   }
 
   if (!supabase) {
-    return res.status(503).json({
-      error: 'Supabase is not configured on Render (missing SUPABASE_SERVICE_ROLE_KEY)',
-    });
+    return res.status(401).json({ error: 'Unauthorized: authentication service unavailable' });
   }
 
   try {
