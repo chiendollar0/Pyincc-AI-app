@@ -6,7 +6,7 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 const port = Number(process.env.PORT) || 3000;
 const config = {
-  supabaseUrl: process.env.SUPABASE_URL,
+  supabaseUrl: process.env.SUPABASE_URL || 'https://ihufvqrxdswgbagzhydb.supabase.co',
   supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   metaAppSecret: process.env.META_APP_SECRET,
   verifyToken: process.env.VERIFY_TOKEN,
@@ -29,15 +29,25 @@ const requiredConfig = [
 ];
 const missingConfig = requiredConfig.filter(([, value]) => !value).map(([name]) => name);
 if (missingConfig.length) {
-  throw new Error(`Missing required environment variables: ${missingConfig.join(', ')}`);
+  console.warn(JSON.stringify({
+    event: 'missing_env_vars',
+    missing: missingConfig,
+  }));
 }
 
-const supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
-  auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-});
+const supabase = config.supabaseUrl && config.supabaseServiceRoleKey
+  ? createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    })
+  : null;
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'pyincc-meta-webhook' });
+  res.json({
+    ok: true,
+    service: 'pyincc-meta-webhook',
+    configured: missingConfig.length === 0,
+    missing: missingConfig,
+  });
 });
 
 // Meta webhook subscription verification handshake.
@@ -54,8 +64,11 @@ app.get('/webhook', (req, res) => {
 
 // Fetch recent inbox messages for the Flutter app (requires x-api-key).
 app.get('/messages', async (req, res) => {
-  if (!safeEqual(req.get('x-api-key'), config.apiKey)) {
+  if (!config.apiKey || !safeEqual(req.get('x-api-key'), config.apiKey)) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!supabase) {
+    return res.status(503).json({ error: 'Supabase is not configured on Render (missing SUPABASE_SERVICE_ROLE_KEY)' });
   }
 
   const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
@@ -85,8 +98,11 @@ app.get('/messages', async (req, res) => {
 
 // Parse only this endpoint as JSON; Meta signature verification uses the exact raw bytes.
 app.post('/send-message', express.json({ limit: '16kb' }), async (req, res) => {
-  if (!safeEqual(req.get('x-api-key'), config.apiKey)) {
+  if (!config.apiKey || !safeEqual(req.get('x-api-key'), config.apiKey)) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!config.pageAccessToken || !config.pageId) {
+    return res.status(503).json({ error: 'Meta Page credentials are not configured on Render (missing PAGE_ID or PAGE_ACCESS_TOKEN)' });
   }
 
   const recipientId = req.body?.recipientId || req.body?.recipient_id;
@@ -113,20 +129,22 @@ app.post('/send-message', express.json({ limit: '16kb' }), async (req, res) => {
     );
 
     const sentMessageId = response.data?.message_id || null;
-    const { error: logError } = await supabase.from('conversation_messages').upsert({
-      org_id: config.orgId,
-      channel: 'facebook',
-      customer_psid: recipientId.trim(),
-      sender: 'staff',
-      message_type: 'text',
-      message_text: text.trim(),
-      message_id: sentMessageId,
-      is_from_customer: false,
-      created_at: new Date().toISOString(),
-    }, { onConflict: 'message_id', ignoreDuplicates: true });
+    if (supabase) {
+      const { error: logError } = await supabase.from('conversation_messages').upsert({
+        org_id: config.orgId,
+        channel: 'facebook',
+        customer_psid: recipientId.trim(),
+        sender: 'staff',
+        message_type: 'text',
+        message_text: text.trim(),
+        message_id: sentMessageId,
+        is_from_customer: false,
+        created_at: new Date().toISOString(),
+      }, { onConflict: 'message_id', ignoreDuplicates: true });
 
-    if (logError) {
-      console.error(JSON.stringify({ event: 'staff_message_persist_failed', message: logError.message }));
+      if (logError) {
+        console.error(JSON.stringify({ event: 'staff_message_persist_failed', message: logError.message }));
+      }
     }
 
     return res.json({ success: true, data: response.data });
@@ -137,6 +155,9 @@ app.post('/send-message', express.json({ limit: '16kb' }), async (req, res) => {
 });
 
 app.post('/webhook', express.raw({ type: 'application/json', limit: '10mb' }), async (req, res) => {
+  if (!config.metaAppSecret || !supabase) {
+    return res.status(503).send('Service not configured');
+  }
   const rawBody = req.body;
   if (!Buffer.isBuffer(rawBody) || rawBody.length === 0) {
     return res.status(400).send('Missing body');

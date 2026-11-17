@@ -39,7 +39,7 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
 
   String _webhookApiUrl = const String.fromEnvironment(
     'WEBHOOK_API_URL',
-    defaultValue: '',
+    defaultValue: 'https://pyincc-ai-app.onrender.com',
   );
   String _webhookApiKey = const String.fromEnvironment(
     'WEBHOOK_API_KEY',
