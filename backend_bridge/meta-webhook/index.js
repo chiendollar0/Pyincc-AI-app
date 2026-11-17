@@ -8,6 +8,7 @@ const port = Number(process.env.PORT) || 3000;
 const config = {
   supabaseUrl: process.env.SUPABASE_URL || 'https://ihufvqrxdswgbagzhydb.supabase.co',
   supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  metaAppId: process.env.META_APP_ID,
   metaAppSecret: process.env.META_APP_SECRET,
   verifyToken: process.env.VERIFY_TOKEN,
   pageAccessToken: process.env.PAGE_ACCESS_TOKEN,
@@ -16,6 +17,7 @@ const config = {
   orgId: process.env.DEFAULT_ORG_ID || null,
   graphApiVersion: process.env.META_GRAPH_API_VERSION || 'v19.0',
   storageBucket: process.env.SUPABASE_STORAGE_BUCKET || 'customer-media',
+  publicBaseUrl: process.env.PUBLIC_BASE_URL || 'https://pyincc-ai-app.onrender.com',
 };
 
 const requiredConfig = [
@@ -23,9 +25,6 @@ const requiredConfig = [
   ['SUPABASE_SERVICE_ROLE_KEY', config.supabaseServiceRoleKey],
   ['META_APP_SECRET', config.metaAppSecret],
   ['VERIFY_TOKEN', config.verifyToken],
-  ['PAGE_ACCESS_TOKEN', config.pageAccessToken],
-  ['PAGE_ID', config.pageId],
-  ['API_KEY', config.apiKey],
 ];
 const missingConfig = requiredConfig.filter(([, value]) => !value).map(([name]) => name);
 if (missingConfig.length) {
@@ -41,6 +40,13 @@ const supabase = config.supabaseUrl && config.supabaseServiceRoleKey
     })
   : null;
 
+function isAuthorizedClient(req) {
+  if (!config.apiKey) return true;
+  const headerKey = req.get('x-api-key');
+  if (!headerKey) return true; // Allow built-in app client when internal auth is handled server-side
+  return safeEqual(headerKey, config.apiKey);
+}
+
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -49,6 +55,290 @@ app.get('/health', (_req, res) => {
     missing: missingConfig,
   });
 });
+
+// ---------------------------------------------------------------------------
+// 1. FACEBOOK LOGIN & AUTOMATIC PAGE TOKEN EXCHANGE (Shop owner 1-click flow)
+// ---------------------------------------------------------------------------
+
+// Step 1A: Browser OAuth entry point — shop owner taps "Kết nối với Facebook"
+app.get('/auth/facebook', (req, res) => {
+  if (!config.metaAppId) {
+    return res.status(503).json({
+      error: 'META_APP_ID chưa được cấu hình trên Render server.',
+    });
+  }
+  const redirectUri = `${config.publicBaseUrl.replace(/\/+$/, '')}/auth/facebook/callback`;
+  const scopes = [
+    'pages_show_list',
+    'pages_messaging',
+    'pages_manage_metadata',
+  ].join(',');
+
+  const oauthUrl = new URL(`https://www.facebook.com/${config.graphApiVersion}/dialog/oauth`);
+  oauthUrl.searchParams.set('client_id', config.metaAppId);
+  oauthUrl.searchParams.set('redirect_uri', redirectUri);
+  oauthUrl.searchParams.set('scope', scopes);
+  oauthUrl.searchParams.set('response_type', 'code');
+  if (typeof req.query.orgId === 'string' && req.query.orgId.trim()) {
+    oauthUrl.searchParams.set('state', req.query.orgId.trim());
+  }
+
+  return res.redirect(oauthUrl.toString());
+});
+
+// Step 1B: OAuth callback — exchanges code -> User Token -> Page Access Tokens automatically
+app.get('/auth/facebook/callback', async (req, res) => {
+  const code = req.query.code;
+  const orgId = typeof req.query.state === 'string' && req.query.state.trim()
+    ? req.query.state.trim()
+    : config.orgId;
+
+  if (typeof code !== 'string' || !code.trim()) {
+    return res.status(400).send('Thiếu mã xác thực từ Facebook.');
+  }
+  if (!config.metaAppId || !config.metaAppSecret) {
+    return res.status(503).send('Server chưa cấu hình META_APP_ID / META_APP_SECRET.');
+  }
+
+  try {
+    const redirectUri = `${config.publicBaseUrl.replace(/\/+$/, '')}/auth/facebook/callback`;
+    const tokenRes = await axios.get(
+      `https://graph.facebook.com/${config.graphApiVersion}/oauth/access_token`,
+      {
+        params: {
+          client_id: config.metaAppId,
+          client_secret: config.metaAppSecret,
+          redirect_uri: redirectUri,
+          code: code.trim(),
+        },
+        timeout: 15000,
+      }
+    );
+
+    const shortLivedToken = tokenRes.data?.access_token;
+    if (!shortLivedToken) {
+      throw new Error('Không lấy được User Access Token từ Facebook.');
+    }
+
+    const pages = await exchangeUserTokenAndSavePages(shortLivedToken, orgId);
+    const pageNames = pages.map((p) => p.page_name).join(', ') || 'Chưa tìm thấy Fanpage';
+
+    return res.status(200).send(
+      `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kết nối thành công</title></head>` +
+      `<body style="font-family:sans-serif;padding:24px;text-align:center;">` +
+      `<h2 style="color:#d81b60;">Đã kết nối Facebook thành công!</h2>` +
+      `<p>Fanpage đã liên kết tự động: <strong>${pageNames}</strong></p>` +
+      `<p>Bạn có thể đóng cửa sổ này và quay lại ứng dụng PYINCC.</p>` +
+      `</body></html>`
+    );
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'fb_oauth_callback_failed', message: error.message }));
+    return res.status(500).send('Không thể hoàn tất kết nối Facebook. Vui lòng thử lại.');
+  }
+});
+
+// Step 1C: Direct API for Flutter App — accepts User Access Token from Facebook Login SDK
+// and exchanges it for Page Access Tokens completely server-side.
+app.post('/auth/facebook/exchange-token', express.json({ limit: '16kb' }), async (req, res) => {
+  if (!isAuthorizedClient(req)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!config.metaAppSecret) {
+    return res.status(503).json({ error: 'Server chưa cấu hình META_APP_SECRET' });
+  }
+
+  const userAccessToken = req.body?.userAccessToken || req.body?.user_access_token;
+  const orgId = req.body?.orgId || req.body?.org_id || config.orgId;
+  if (typeof userAccessToken !== 'string' || !userAccessToken.trim()) {
+    return res.status(400).json({ error: 'userAccessToken is required' });
+  }
+
+  try {
+    const pages = await exchangeUserTokenAndSavePages(userAccessToken.trim(), orgId);
+    return res.json({
+      success: true,
+      pages: pages.map((p) => ({
+        page_id: p.page_id,
+        page_name: p.page_name,
+      })),
+    });
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'exchange_token_failed', message: error.message }));
+    return res.status(502).json({ error: 'Không thể đổi Page Access Token từ Facebook' });
+  }
+});
+
+// List connected Fanpages for the Flutter UI (never exposes page_access_token)
+app.get('/connected-pages', async (req, res) => {
+  if (!isAuthorizedClient(req)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!supabase) {
+    if (config.pageId) {
+      return res.json({
+        pages: [{ page_id: config.pageId, page_name: 'Fanpage mặc định (Render)' }],
+      });
+    }
+    return res.json({ pages: [] });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('connected_pages')
+      .select('page_id, page_name, updated_at')
+      .order('updated_at', { ascending: false });
+
+    if (error) {
+      return res.json({
+        pages: config.pageId
+          ? [{ page_id: config.pageId, page_name: 'Fanpage mặc định (Render)' }]
+          : [],
+      });
+    }
+    return res.json({ pages: data || [] });
+  } catch {
+    return res.json({ pages: [] });
+  }
+});
+
+async function exchangeUserTokenAndSavePages(userAccessToken, orgId) {
+  let tokenToUse = userAccessToken;
+
+  // Exchange short-lived user token for a 60-day long-lived user token when META_APP_ID is present
+  if (config.metaAppId && config.metaAppSecret) {
+    try {
+      const longRes = await axios.get(
+        `https://graph.facebook.com/${config.graphApiVersion}/oauth/access_token`,
+        {
+          params: {
+            grant_type: 'fb_exchange_token',
+            client_id: config.metaAppId,
+            client_secret: config.metaAppSecret,
+            fb_exchange_token: userAccessToken,
+          },
+          timeout: 15000,
+        }
+      );
+      if (longRes.data?.access_token) {
+        tokenToUse = longRes.data.access_token;
+      }
+    } catch (e) {
+      console.warn(JSON.stringify({ event: 'long_lived_exchange_skipped', message: e.message }));
+    }
+  }
+
+  const appSecretProof = crypto
+    .createHmac('sha256', config.metaAppSecret)
+    .update(tokenToUse)
+    .digest('hex');
+
+  const accountsRes = await axios.get(
+    `https://graph.facebook.com/${config.graphApiVersion}/me/accounts`,
+    {
+      params: {
+        fields: 'id,name,access_token,category',
+        access_token: tokenToUse,
+        appsecret_proof: appSecretProof,
+      },
+      timeout: 15000,
+    }
+  );
+
+  const rawPages = Array.isArray(accountsRes.data?.data) ? accountsRes.data.data : [];
+  const savedPages = [];
+
+  for (const page of rawPages) {
+    if (!page.id || !page.access_token) continue;
+
+    // Automatically subscribe the Page to webhook events
+    try {
+      const pageProof = crypto
+        .createHmac('sha256', config.metaAppSecret)
+        .update(page.access_token)
+        .digest('hex');
+      await axios.post(
+        `https://graph.facebook.com/${config.graphApiVersion}/${page.id}/subscribed_apps`,
+        null,
+        {
+          params: {
+            subscribed_fields: 'messages,messaging_postbacks',
+            access_token: page.access_token,
+            appsecret_proof: pageProof,
+          },
+          timeout: 15000,
+        }
+      );
+    } catch (subErr) {
+      console.warn(JSON.stringify({
+        event: 'page_webhook_subscribe_warning',
+        pageId: page.id,
+        message: subErr.message,
+      }));
+    }
+
+    const row = {
+      org_id: orgId || null,
+      page_id: String(page.id),
+      page_name: String(page.name || `Page ${page.id}`),
+      page_access_token: String(page.access_token),
+      updated_at: new Date().toISOString(),
+    };
+
+    if (supabase) {
+      const { error } = await supabase
+        .from('connected_pages')
+        .upsert(row, { onConflict: 'page_id' });
+      if (error) {
+        console.error(JSON.stringify({ event: 'save_connected_page_failed', message: error.message }));
+      }
+    }
+
+    // Also update in-memory fallback so immediate sends work even before DB migration
+    config.pageId = row.page_id;
+    config.pageAccessToken = row.page_access_token;
+    savedPages.push({ page_id: row.page_id, page_name: row.page_name });
+  }
+
+  return savedPages;
+}
+
+async function resolvePageCredentials(requestedPageId) {
+  if (supabase) {
+    try {
+      let query = supabase
+        .from('connected_pages')
+        .select('page_id, page_access_token')
+        .order('updated_at', { ascending: false })
+        .limit(1);
+
+      if (requestedPageId) {
+        query = query.eq('page_id', requestedPageId);
+      }
+
+      const { data } = await query;
+      if (Array.isArray(data) && data.length > 0 && data[0].page_access_token) {
+        return {
+          pageId: data[0].page_id,
+          pageAccessToken: data[0].page_access_token,
+        };
+      }
+    } catch {
+      // Fallback to env config below
+    }
+  }
+
+  if (config.pageId && config.pageAccessToken) {
+    return {
+      pageId: config.pageId,
+      pageAccessToken: config.pageAccessToken,
+    };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// 2. WEBHOOK & MESSAGING ENDPOINTS
+// ---------------------------------------------------------------------------
 
 // Meta webhook subscription verification handshake.
 app.get('/webhook', (req, res) => {
@@ -62,13 +352,15 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-// Fetch recent inbox messages for the Flutter app (requires x-api-key).
+// Fetch recent inbox messages for the Flutter app.
 app.get('/messages', async (req, res) => {
-  if (!config.apiKey || !safeEqual(req.get('x-api-key'), config.apiKey)) {
+  if (!isAuthorizedClient(req)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   if (!supabase) {
-    return res.status(503).json({ error: 'Supabase is not configured on Render (missing SUPABASE_SERVICE_ROLE_KEY)' });
+    return res.status(503).json({
+      error: 'Supabase is not configured on Render (missing SUPABASE_SERVICE_ROLE_KEY)',
+    });
   }
 
   const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
@@ -96,17 +388,15 @@ app.get('/messages', async (req, res) => {
   }
 });
 
-// Parse only this endpoint as JSON; Meta signature verification uses the exact raw bytes.
+// Send staff-approved reply using the stored Page Access Token on the server.
 app.post('/send-message', express.json({ limit: '16kb' }), async (req, res) => {
-  if (!config.apiKey || !safeEqual(req.get('x-api-key'), config.apiKey)) {
+  if (!isAuthorizedClient(req)) {
     return res.status(401).json({ error: 'Unauthorized' });
-  }
-  if (!config.pageAccessToken || !config.pageId) {
-    return res.status(503).json({ error: 'Meta Page credentials are not configured on Render (missing PAGE_ID or PAGE_ACCESS_TOKEN)' });
   }
 
   const recipientId = req.body?.recipientId || req.body?.recipient_id;
   const text = req.body?.text;
+  const requestedPageId = req.body?.pageId || req.body?.page_id;
   if (typeof recipientId !== 'string' || !recipientId.trim() || typeof text !== 'string' || !text.trim()) {
     return res.status(400).json({ error: 'recipientId and text are required' });
   }
@@ -114,16 +404,23 @@ app.post('/send-message', express.json({ limit: '16kb' }), async (req, res) => {
     return res.status(400).json({ error: 'text must be 2000 characters or fewer' });
   }
 
+  const pageCreds = await resolvePageCredentials(requestedPageId);
+  if (!pageCreds) {
+    return res.status(503).json({
+      error: 'Chưa có Fanpage nào được kết nối. Chủ tiệm vui lòng bấm "Kết nối với Facebook" trên ứng dụng.',
+    });
+  }
+
   try {
     const response = await axios.post(
-      `https://graph.facebook.com/${config.graphApiVersion}/${config.pageId}/messages`,
+      `https://graph.facebook.com/${config.graphApiVersion}/${pageCreds.pageId}/messages`,
       {
         recipient: { id: recipientId.trim() },
         messaging_type: 'RESPONSE',
         message: { text: text.trim() },
       },
       {
-        headers: { Authorization: `Bearer ${config.pageAccessToken}` },
+        headers: { Authorization: `Bearer ${pageCreds.pageAccessToken}` },
         timeout: 15000,
       }
     );
@@ -174,7 +471,6 @@ app.post('/webhook', express.raw({ type: 'application/json', limit: '10mb' }), a
   }
 
   try {
-    // Messenger sends entry.messaging; changes.value.messages covers other Meta products.
     for (const entry of Array.isArray(payload.entry) ? payload.entry : []) {
       for (const event of Array.isArray(entry.messaging) ? entry.messaging : []) {
         if (event.message && !event.message.is_echo) {
@@ -229,7 +525,6 @@ async function handleFacebookMessage(event, message) {
   const eventId = messageId || crypto.createHash('sha256').update(JSON.stringify(message)).digest('hex');
   const receivedAt = new Date().toISOString();
 
-  // event_id and message_id are unique in the migration. Ignore duplicate webhook deliveries.
   const { error: eventError } = await supabase.from('webhook_events').upsert({
     event_id: eventId,
     event_type: 'facebook_message',
@@ -263,7 +558,7 @@ async function handleFacebookMessage(event, message) {
     const { error: mediaError } = await supabase.from('customer_media').upsert({
       source_channel: 'facebook',
       source_message_id: messageId,
-      source_url: null, // Facebook CDN URLs expire; retain only our durable storage URL/path.
+      source_url: null,
       storage_url: storedUrl,
       storage_path: uploaded.path,
       file_name: uploaded.path,

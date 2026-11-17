@@ -26,6 +26,17 @@ drop index if exists public.customer_media_source_message_id_uidx;
 create unique index if not exists customer_media_source_message_id_uidx
   on public.customer_media (source_message_id);
 
+create table if not exists public.connected_pages (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid references public.organizations(id) on delete cascade,
+  page_id text not null unique,
+  page_name text not null,
+  page_access_token text not null,
+  connected_by_fb_user_id text,
+  connected_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
 create or replace function public.touch_conversation_updated_at()
 returns trigger as $$
 begin

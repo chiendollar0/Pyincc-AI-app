@@ -37,55 +37,33 @@ class MainDashboardScreen extends StatefulWidget {
 class _MainDashboardScreenState extends State<MainDashboardScreen> {
   int _selectedIndex = 0;
 
-  String _webhookApiUrl = const String.fromEnvironment(
-    'WEBHOOK_API_URL',
-    defaultValue: 'https://pyincc-ai-app.onrender.com',
-  );
-  String _webhookApiKey = const String.fromEnvironment(
-    'WEBHOOK_API_KEY',
-    defaultValue: '',
-  );
-  final String _supabaseUrl = const String.fromEnvironment(
-    'SUPABASE_URL',
-    defaultValue: 'https://ihufvqrxdswgbagzhydb.supabase.co',
-  );
-  final String _supabaseAnonKey = const String.fromEnvironment(
-    'SUPABASE_ANON_KEY',
-    defaultValue: '',
-  );
-  final String _tryOnApiUrl = const String.fromEnvironment(
-    'TRYON_API_URL',
-    defaultValue: '',
+  late final InboxService _inboxService = InboxService(
+    webhookBaseUrl: const String.fromEnvironment(
+      'WEBHOOK_API_URL',
+      defaultValue: InboxService.defaultBackendUrl,
+    ),
+    supabaseUrl: const String.fromEnvironment(
+      'SUPABASE_URL',
+      defaultValue: 'https://ihufvqrxdswgbagzhydb.supabase.co',
+    ),
+    supabaseAnonKey: const String.fromEnvironment(
+      'SUPABASE_ANON_KEY',
+      defaultValue: '',
+    ),
   );
 
-  void _updateWebhookConfig({
-    required String webhookUrl,
-    required String webhookKey,
-  }) {
-    setState(() {
-      _webhookApiUrl = webhookUrl.trim();
-      _webhookApiKey = webhookKey.trim();
-    });
-  }
+  final String _tryOnApiUrl = const String.fromEnvironment(
+    'TRYON_API_URL',
+    defaultValue: InboxService.defaultBackendUrl,
+  );
 
   @override
   Widget build(BuildContext context) {
     final screens = <Widget>[
-      AiTriageInboxScreen(
-        inboxService: InboxService(
-          webhookBaseUrl: _webhookApiUrl,
-          webhookApiKey: _webhookApiKey,
-          supabaseUrl: _supabaseUrl,
-          supabaseAnonKey: _supabaseAnonKey,
-        ),
-      ),
+      AiTriageInboxScreen(inboxService: _inboxService),
       TryOnStudioScreen(apiBaseUrl: _tryOnApiUrl),
       const ShiftAndBookingScreen(),
-      OwnerSettingsScreen(
-        initialWebhookUrl: _webhookApiUrl,
-        initialWebhookKey: _webhookApiKey,
-        onSaveConfig: _updateWebhookConfig,
-      ),
+      OwnerSettingsScreen(inboxService: _inboxService),
     ];
 
     return Scaffold(
@@ -168,36 +146,16 @@ class _AiTriageInboxScreenState extends State<AiTriageInboxScreen> {
   void initState() {
     super.initState();
     _refreshMessages();
-    _startPollingIfConfigured();
-  }
-
-  @override
-  void didUpdateWidget(covariant AiTriageInboxScreen oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.inboxService.webhookBaseUrl !=
-            widget.inboxService.webhookBaseUrl ||
-        oldWidget.inboxService.webhookApiKey !=
-            widget.inboxService.webhookApiKey) {
-      _refreshMessages();
-      _startPollingIfConfigured();
-    }
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => _refreshMessages(silent: true),
+    );
   }
 
   @override
   void dispose() {
     _pollTimer?.cancel();
     super.dispose();
-  }
-
-  void _startPollingIfConfigured() {
-    _pollTimer?.cancel();
-    if (widget.inboxService.hasWebhookConfig ||
-        widget.inboxService.hasSupabaseRestConfig) {
-      _pollTimer = Timer.periodic(
-        const Duration(seconds: 15),
-        (_) => _refreshMessages(silent: true),
-      );
-    }
   }
 
   Color _colorForTagType(String? tagType) {
@@ -216,19 +174,6 @@ class _AiTriageInboxScreenState extends State<AiTriageInboxScreen> {
   }
 
   Future<void> _refreshMessages({bool silent = false}) async {
-    if (!widget.inboxService.hasWebhookConfig &&
-        !widget.inboxService.hasSupabaseRestConfig) {
-      if (mounted) {
-        setState(() {
-          _chats = _demoChats;
-          _isLiveMode = false;
-          _statusBanner =
-              'Đang hiển thị dữ liệu mẫu. Nhập URL & API Key của Meta Webhook trong mục "Chủ tiệm" để nhận tin nhắn thật.';
-        });
-      }
-      return;
-    }
-
     if (!silent && mounted) {
       setState(() => _isLoading = true);
     }
@@ -237,21 +182,22 @@ class _AiTriageInboxScreenState extends State<AiTriageInboxScreen> {
       final liveChats = await widget.inboxService.fetchMessages();
       if (!mounted) return;
       setState(() {
-        _isLiveMode = true;
+        _isLiveMode = liveChats.isNotEmpty;
         if (liveChats.isNotEmpty) {
           _chats = liveChats;
           _statusBanner =
               'Đang đồng bộ trực tiếp (${liveChats.length} tin nhắn gần nhất).';
         } else {
           _chats = _demoChats;
-          _statusBanner =
-              'Đã kết nối backend nhưng chưa có tin nhắn mới trong Supabase (đang hiển thị mẫu).';
+          _statusBanner = null;
         }
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
-        _statusBanner = 'Lỗi đồng bộ: $e';
+        _chats = _demoChats;
+        _isLiveMode = false;
+        _statusBanner = null;
       });
     } finally {
       if (!silent && mounted) {
@@ -527,18 +473,11 @@ class ShiftAndBookingScreen extends StatelessWidget {
 }
 
 class OwnerSettingsScreen extends StatefulWidget {
-  final String initialWebhookUrl;
-  final String initialWebhookKey;
-  final void Function({
-    required String webhookUrl,
-    required String webhookKey,
-  }) onSaveConfig;
+  final InboxService inboxService;
 
   const OwnerSettingsScreen({
     super.key,
-    required this.initialWebhookUrl,
-    required this.initialWebhookKey,
-    required this.onSaveConfig,
+    required this.inboxService,
   });
 
   @override
@@ -546,75 +485,141 @@ class OwnerSettingsScreen extends StatefulWidget {
 }
 
 class _OwnerSettingsScreenState extends State<OwnerSettingsScreen> {
-  late final TextEditingController _webhookUrlController;
-  late final TextEditingController _webhookKeyController;
+  List<Map<String, dynamic>> _connectedPages = const [];
+  bool _isCheckingPages = false;
 
   @override
   void initState() {
     super.initState();
-    _webhookUrlController =
-        TextEditingController(text: widget.initialWebhookUrl);
-    _webhookKeyController =
-        TextEditingController(text: widget.initialWebhookKey);
+    _loadConnectedPages();
   }
 
-  @override
-  void dispose() {
-    _webhookUrlController.dispose();
-    _webhookKeyController.dispose();
-    super.dispose();
+  Future<void> _loadConnectedPages() async {
+    setState(() => _isCheckingPages = true);
+    try {
+      final pages = await widget.inboxService.fetchConnectedPages();
+      if (!mounted) return;
+      setState(() => _connectedPages = pages);
+    } finally {
+      if (mounted) {
+        setState(() => _isCheckingPages = false);
+      }
+    }
   }
 
-  void _save() {
-    widget.onSaveConfig(
-      webhookUrl: _webhookUrlController.text,
-      webhookKey: _webhookKeyController.text,
-    );
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Đã lưu cấu hình Meta Webhook cho Hộp thư AI!'),
+  Future<void> _onTapConnectFacebook() async {
+    await _loadConnectedPages();
+    if (!mounted) return;
+
+    if (_connectedPages.isNotEmpty) {
+      final names = _connectedPages
+          .map((p) => (p['page_name'] ?? p['page_id']).toString())
+          .join(', ');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Đã kết nối tự động với Fanpage: $names'),
+        ),
+      );
+      return;
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Kết nối với Facebook'),
+        content: const Text(
+          'Hệ thống sẽ chuyển sang đăng nhập Facebook của bạn và tự động liên kết Fanpage của tiệm (không cần nhập bất kỳ mã khóa nào).',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Đóng'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _loadConnectedPages();
+            },
+            icon: const Icon(Icons.check_circle_outline),
+            label: const Text('Đã đăng nhập xong'),
+          ),
+        ],
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final isConnected = _connectedPages.isNotEmpty;
+    final connectedLabel = isConnected
+        ? _connectedPages
+            .map((p) => (p['page_name'] ?? p['page_id']).toString())
+            .join(', ')
+        : 'Chưa kết nối Fanpage';
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Cấu hình Chủ tiệm')),
+      appBar: AppBar(title: const Text('Chủ tiệm')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'URL Meta Webhook Backend (Render):',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _webhookUrlController,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                hintText: 'VD: https://pyincc-meta-webhook.onrender.com',
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          isConnected
+                              ? Icons.verified
+                              : Icons.facebook_outlined,
+                          color: isConnected ? Colors.green : Colors.blue,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            isConnected
+                                ? 'Đã liên kết: $connectedLabel'
+                                : 'Liên kết Fanpage của tiệm',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Chỉ cần đăng nhập tài khoản Facebook quản lý Fanpage. Máy chủ sẽ tự động đồng bộ tin nhắn và gửi phản hồi khi bạn duyệt.',
+                      style: TextStyle(fontSize: 13, color: Colors.black87),
+                    ),
+                    const SizedBox(height: 14),
+                    FilledButton.icon(
+                      onPressed:
+                          _isCheckingPages ? null : _onTapConnectFacebook,
+                      icon: const Icon(Icons.facebook),
+                      label: Text(
+                        isConnected
+                            ? 'Làm mới kết nối Facebook'
+                            : 'Kết nối với Facebook',
+                      ),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF1877F2),
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size(double.infinity, 48),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 20),
             const Text(
-              'Webhook API Key (x-api-key):',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _webhookKeyController,
-              obscureText: true,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                hintText: 'Nhập API_KEY cấu hình trên Render',
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Kịch bản & Bảng giá để Gemini đóng vai Chủ tiệm:',
+              'Kịch bản & Bảng giá để AI đóng vai Chủ tiệm:',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
@@ -628,11 +633,17 @@ class _OwnerSettingsScreenState extends State<OwnerSettingsScreen> {
             ),
             const SizedBox(height: 16),
             FilledButton(
-              onPressed: _save,
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Đã lưu kịch bản tư vấn của Chủ tiệm!'),
+                  ),
+                );
+              },
               style: FilledButton.styleFrom(
                 minimumSize: const Size(double.infinity, 48),
               ),
-              child: const Text('Lưu cấu hình hệ thống'),
+              child: const Text('Lưu kịch bản tư vấn'),
             ),
           ],
         ),

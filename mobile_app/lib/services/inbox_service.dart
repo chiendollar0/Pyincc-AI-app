@@ -4,27 +4,83 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 class InboxService {
+  static const String defaultBackendUrl = 'https://pyincc-ai-app.onrender.com';
+
   final String webhookBaseUrl;
-  final String webhookApiKey;
   final String supabaseUrl;
   final String supabaseAnonKey;
 
   InboxService({
-    required this.webhookBaseUrl,
-    required this.webhookApiKey,
+    this.webhookBaseUrl = defaultBackendUrl,
     this.supabaseUrl = '',
     this.supabaseAnonKey = '',
   });
 
-  bool get hasWebhookConfig =>
-      webhookBaseUrl.trim().isNotEmpty && webhookApiKey.trim().isNotEmpty;
+  bool get hasWebhookConfig => webhookBaseUrl.trim().isNotEmpty;
 
   bool get hasSupabaseRestConfig =>
       supabaseUrl.trim().isNotEmpty && supabaseAnonKey.trim().isNotEmpty;
 
+  String get facebookOAuthUrl {
+    final base = webhookBaseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
+    return '$base/auth/facebook';
+  }
+
   Uri _webhookEndpoint(String path) {
     final base = webhookBaseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
     return Uri.parse('$base$path');
+  }
+
+  Future<List<Map<String, dynamic>>> fetchConnectedPages() async {
+    if (!hasWebhookConfig) return const [];
+    try {
+      final response = await http
+          .get(_webhookEndpoint('/connected-pages'))
+          .timeout(const Duration(seconds: 12));
+      if (response.statusCode != 200) return const [];
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic> && decoded['pages'] is List) {
+        return (decoded['pages'] as List)
+            .whereType<Map<String, dynamic>>()
+            .toList();
+      }
+      return const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> exchangeFacebookUserToken(
+    String userAccessToken,
+  ) async {
+    late final http.Response response;
+    try {
+      response = await http
+          .post(
+            _webhookEndpoint('/auth/facebook/exchange-token'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'userAccessToken': userAccessToken.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+    } on SocketException catch (e) {
+      throw Exception('Không kết nối được máy chủ PYINCC: $e');
+    }
+
+    if (response.statusCode != 200) {
+      throw Exception(
+        'Kết nối Facebook chưa hoàn tất (HTTP ${response.statusCode}).',
+      );
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is Map<String, dynamic> && decoded['pages'] is List) {
+      return (decoded['pages'] as List)
+          .whereType<Map<String, dynamic>>()
+          .toList();
+    }
+    return const [];
   }
 
   Future<List<Map<String, dynamic>>> fetchMessages({int limit = 30}) async {
@@ -43,26 +99,19 @@ class InboxService {
     late final http.Response response;
     try {
       response = await http
-          .get(
-            _webhookEndpoint('/messages?limit=$limit'),
-            headers: {
-              'x-api-key': webhookApiKey.trim(),
-            },
-          )
+          .get(_webhookEndpoint('/messages?limit=$limit'))
           .timeout(const Duration(seconds: 15));
     } on SocketException catch (e) {
-      throw Exception('Không kết nối được Meta Webhook backend: $e');
+      throw Exception('Không kết nối được máy chủ: $e');
     }
 
     if (response.statusCode != 200) {
-      throw Exception(
-        'Lỗi tải tin nhắn (HTTP ${response.statusCode}): ${response.body}',
-      );
+      throw Exception('Máy chủ đang khởi động (HTTP ${response.statusCode}).');
     }
 
     final decoded = jsonDecode(response.body);
     if (decoded is! Map<String, dynamic> || decoded['messages'] is! List) {
-      throw Exception('Dữ liệu /messages trả về không đúng định dạng.');
+      throw Exception('Dữ liệu hộp thư không đúng định dạng.');
     }
 
     final rawList = decoded['messages'] as List;
@@ -92,18 +141,16 @@ class InboxService {
           )
           .timeout(const Duration(seconds: 15));
     } on SocketException catch (e) {
-      throw Exception('Không kết nối được Supabase REST: $e');
+      throw Exception('Không kết nối được dữ liệu: $e');
     }
 
     if (response.statusCode != 200) {
-      throw Exception(
-        'Supabase REST lỗi HTTP ${response.statusCode}: ${response.body}',
-      );
+      throw Exception('Lỗi tải dữ liệu (HTTP ${response.statusCode}).');
     }
 
     final decoded = jsonDecode(response.body);
     if (decoded is! List) {
-      throw Exception('Dữ liệu Supabase trả về không phải danh sách.');
+      throw Exception('Dữ liệu trả về không phải danh sách.');
     }
 
     return decoded
@@ -116,12 +163,6 @@ class InboxService {
     required String recipientId,
     required String text,
   }) async {
-    if (!hasWebhookConfig) {
-      throw Exception(
-        'Chưa cấu hình WEBHOOK_API_URL và WEBHOOK_API_KEY trong mục Chủ tiệm.',
-      );
-    }
-
     late final http.Response response;
     try {
       response = await http
@@ -129,7 +170,6 @@ class InboxService {
             _webhookEndpoint('/send-message'),
             headers: {
               'Content-Type': 'application/json',
-              'x-api-key': webhookApiKey.trim(),
             },
             body: jsonEncode({
               'recipientId': recipientId.trim(),
@@ -138,12 +178,12 @@ class InboxService {
           )
           .timeout(const Duration(seconds: 20));
     } on SocketException catch (e) {
-      throw Exception('Không kết nối được backend gửi tin: $e');
+      throw Exception('Không kết nối được máy chủ gửi tin: $e');
     }
 
     if (response.statusCode != 200) {
       throw Exception(
-        'Gửi tin thất bại (HTTP ${response.statusCode}): ${response.body}',
+        'Chưa gửi được tin nhắn (HTTP ${response.statusCode}). Vui lòng kiểm tra kết nối Facebook.',
       );
     }
   }

@@ -83,6 +83,17 @@ create table webhook_events (
   received_at timestamptz default now()
 );
 
+create table connected_pages (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid references organizations(id) on delete cascade,
+  page_id text not null unique,
+  page_name text not null,
+  page_access_token text not null,
+  connected_by_fb_user_id text,
+  connected_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
 create table bookings (
   id uuid primary key default gen_random_uuid(),
   org_id uuid references organizations(id) on delete cascade,
