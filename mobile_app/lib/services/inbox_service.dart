@@ -9,12 +9,30 @@ class InboxService {
   final String webhookBaseUrl;
   final String supabaseUrl;
   final String supabaseAnonKey;
+  final String authToken;
 
   InboxService({
     this.webhookBaseUrl = defaultBackendUrl,
     this.supabaseUrl = '',
     this.supabaseAnonKey = '',
+    this.authToken = const String.fromEnvironment(
+      'BACKEND_AUTH_TOKEN',
+      defaultValue: '',
+    ),
   });
+
+  Map<String, String> _authHeaders({bool json = false}) {
+    final headers = <String, String>{};
+    if (json) {
+      headers['Content-Type'] = 'application/json';
+    }
+    final token = authToken.trim();
+    if (token.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $token';
+      headers['x-api-key'] = token;
+    }
+    return headers;
+  }
 
   bool get hasWebhookConfig => webhookBaseUrl.trim().isNotEmpty;
 
@@ -35,7 +53,10 @@ class InboxService {
     if (!hasWebhookConfig) return const [];
     try {
       final response = await http
-          .get(_webhookEndpoint('/connected-pages'))
+          .get(
+            _webhookEndpoint('/connected-pages'),
+            headers: _authHeaders(),
+          )
           .timeout(const Duration(seconds: 12));
       if (response.statusCode != 200) return const [];
       final decoded = jsonDecode(response.body);
@@ -58,7 +79,7 @@ class InboxService {
       response = await http
           .post(
             _webhookEndpoint('/auth/facebook/exchange-token'),
-            headers: {'Content-Type': 'application/json'},
+            headers: _authHeaders(json: true),
             body: jsonEncode({
               'userAccessToken': userAccessToken.trim(),
             }),
@@ -99,7 +120,10 @@ class InboxService {
     late final http.Response response;
     try {
       response = await http
-          .get(_webhookEndpoint('/messages?limit=$limit'))
+          .get(
+            _webhookEndpoint('/messages?limit=$limit'),
+            headers: _authHeaders(),
+          )
           .timeout(const Duration(seconds: 15));
     } on SocketException catch (e) {
       throw Exception('Không kết nối được máy chủ: $e');
@@ -168,9 +192,7 @@ class InboxService {
       response = await http
           .post(
             _webhookEndpoint('/send-message'),
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers: _authHeaders(json: true),
             body: jsonEncode({
               'recipientId': recipientId.trim(),
               'text': text.trim(),
@@ -197,7 +219,10 @@ class InboxService {
     }
     try {
       final response = await http
-          .get(_webhookEndpoint('/settings'))
+          .get(
+            _webhookEndpoint('/settings'),
+            headers: _authHeaders(),
+          )
           .timeout(const Duration(seconds: 12));
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
@@ -229,7 +254,7 @@ class InboxService {
       response = await http
           .put(
             _webhookEndpoint('/settings'),
-            headers: {'Content-Type': 'application/json'},
+            headers: _authHeaders(json: true),
             body: jsonEncode(payload),
           )
           .timeout(const Duration(seconds: 15));
@@ -246,7 +271,10 @@ class InboxService {
     if (!hasWebhookConfig) return const [];
     try {
       final response = await http
-          .get(_webhookEndpoint('/bookings'))
+          .get(
+            _webhookEndpoint('/bookings'),
+            headers: _authHeaders(),
+          )
           .timeout(const Duration(seconds: 12));
       if (response.statusCode != 200) return const [];
       final decoded = jsonDecode(response.body);
@@ -294,7 +322,7 @@ class InboxService {
       response = await http
           .post(
             _webhookEndpoint('/bookings'),
-            headers: {'Content-Type': 'application/json'},
+            headers: _authHeaders(json: true),
             body: jsonEncode({
               'time': time.trim(),
               'customerName': customerName.trim(),

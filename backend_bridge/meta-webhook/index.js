@@ -40,11 +40,34 @@ const supabase = config.supabaseUrl && config.supabaseServiceRoleKey
     })
   : null;
 
-function isAuthorizedClient(req) {
-  if (!config.apiKey) return true;
+async function requireAuth(req, res, next) {
   const headerKey = req.get('x-api-key');
-  if (!headerKey) return true; // Allow built-in app client when internal auth is handled server-side
-  return safeEqual(headerKey, config.apiKey);
+  if (config.apiKey && typeof headerKey === 'string' && safeEqual(headerKey, config.apiKey)) {
+    return next();
+  }
+
+  const authHeader = req.get('authorization') || '';
+  const bearerMatch = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+  const bearerToken = bearerMatch ? bearerMatch[1].trim() : '';
+
+  if (bearerToken) {
+    if (config.apiKey && safeEqual(bearerToken, config.apiKey)) {
+      return next();
+    }
+    if (supabase) {
+      try {
+        const { data, error } = await supabase.auth.getUser(bearerToken);
+        if (!error && data?.user) {
+          req.authUser = data.user;
+          return next();
+        }
+      } catch {
+        // Fall through to 401
+      }
+    }
+  }
+
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 app.get('/health', (_req, res) => {
@@ -139,10 +162,7 @@ app.get('/auth/facebook/callback', async (req, res) => {
 
 // Step 1C: Direct API for Flutter App — accepts User Access Token from Facebook Login SDK
 // and exchanges it for Page Access Tokens completely server-side.
-app.post('/auth/facebook/exchange-token', express.json({ limit: '16kb' }), async (req, res) => {
-  if (!isAuthorizedClient(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.post('/auth/facebook/exchange-token', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
   if (!config.metaAppSecret) {
     return res.status(503).json({ error: 'Server chưa cấu hình META_APP_SECRET' });
   }
@@ -169,10 +189,7 @@ app.post('/auth/facebook/exchange-token', express.json({ limit: '16kb' }), async
 });
 
 // List connected Fanpages for the Flutter UI (never exposes page_access_token)
-app.get('/connected-pages', async (req, res) => {
-  if (!isAuthorizedClient(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.get('/connected-pages', requireAuth, async (req, res) => {
   if (!supabase) {
     if (config.pageId) {
       return res.json({
@@ -364,10 +381,7 @@ const memoryStore = {
   ],
 };
 
-app.get('/settings', async (req, res) => {
-  if (!isAuthorizedClient(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.get('/settings', requireAuth, async (req, res) => {
   if (supabase) {
     try {
       const { data, error } = await supabase
@@ -395,10 +409,7 @@ app.get('/settings', async (req, res) => {
   });
 });
 
-app.put('/settings', express.json({ limit: '32kb' }), async (req, res) => {
-  if (!isAuthorizedClient(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.put('/settings', requireAuth, express.json({ limit: '32kb' }), async (req, res) => {
   if (typeof req.body?.onDuty === 'boolean') {
     memoryStore.onDuty = req.body.onDuty;
   }
@@ -430,10 +441,7 @@ app.put('/settings', express.json({ limit: '32kb' }), async (req, res) => {
   });
 });
 
-app.get('/bookings', async (req, res) => {
-  if (!isAuthorizedClient(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.get('/bookings', requireAuth, async (req, res) => {
   if (supabase) {
     try {
       const { data, error } = await supabase
@@ -451,10 +459,7 @@ app.get('/bookings', async (req, res) => {
   return res.json({ bookings: memoryStore.bookings });
 });
 
-app.post('/bookings', express.json({ limit: '16kb' }), async (req, res) => {
-  if (!isAuthorizedClient(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.post('/bookings', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
   const customerName = String(req.body?.customerName || req.body?.customer_name || '').trim();
   const customerPhone = String(req.body?.customerPhone || req.body?.customer_phone || '').trim();
   const serviceName = String(req.body?.serviceName || req.body?.service_name || '').trim();
@@ -508,11 +513,7 @@ app.post('/bookings', express.json({ limit: '16kb' }), async (req, res) => {
   return res.json({ success: true, booking: fallbackRow });
 });
 
-app.post('/send-tryon-image', express.json({ limit: '15mb' }), async (req, res) => {
-  if (!isAuthorizedClient(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
+app.post('/send-tryon-image', requireAuth, express.json({ limit: '15mb' }), async (req, res) => {
   const recipientId = String(req.body?.recipientId || req.body?.recipient_id || '').trim();
   const imageBase64 = String(req.body?.imageBase64 || req.body?.image_base64 || '').trim();
   const caption = String(req.body?.caption || '').trim();
@@ -636,10 +637,7 @@ app.get('/webhook', (req, res) => {
 });
 
 // Fetch recent inbox messages for the Flutter app.
-app.get('/messages', async (req, res) => {
-  if (!isAuthorizedClient(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.get('/messages', requireAuth, async (req, res) => {
   if (!supabase) {
     return res.status(503).json({
       error: 'Supabase is not configured on Render (missing SUPABASE_SERVICE_ROLE_KEY)',
@@ -672,11 +670,7 @@ app.get('/messages', async (req, res) => {
 });
 
 // Send staff-approved reply using the stored Page Access Token on the server.
-app.post('/send-message', express.json({ limit: '16kb' }), async (req, res) => {
-  if (!isAuthorizedClient(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
+app.post('/send-message', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
   const recipientId = req.body?.recipientId || req.body?.recipient_id;
   const text = req.body?.text;
   const requestedPageId = req.body?.pageId || req.body?.page_id;

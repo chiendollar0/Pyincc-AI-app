@@ -6,8 +6,25 @@ import 'package:http/http.dart' as http;
 
 class TryOnImageService {
   final String apiBaseUrl;
+  final String authToken;
 
-  TryOnImageService({required this.apiBaseUrl});
+  TryOnImageService({
+    required this.apiBaseUrl,
+    this.authToken = const String.fromEnvironment(
+      'BACKEND_AUTH_TOKEN',
+      defaultValue: '',
+    ),
+  });
+
+  Map<String, String> _jsonHeaders() {
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    final token = authToken.trim();
+    if (token.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $token';
+      headers['x-api-key'] = token;
+    }
+    return headers;
+  }
 
   Uri _endpoint(String path) {
     final base = apiBaseUrl.trim();
@@ -28,7 +45,7 @@ class TryOnImageService {
       response = await http
           .post(
             _endpoint(path),
-            headers: {'Content-Type': 'application/json'},
+            headers: _jsonHeaders(),
             body: jsonEncode(body),
           )
           .timeout(timeout);
