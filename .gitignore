@@ -19,3 +19,5 @@ backend_bridge/**/*.log
 .vscode/
 .DS_Store
 Thumbs.db
+*.zip
+Pyincc-AI-app-main/

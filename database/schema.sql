@@ -50,6 +50,10 @@ create table conversation_messages (
   message_type text check (message_type in ('text','image','file','audio','video')) default 'text',
   message_text text,
   image_url text,
+  message_id text,
+  attachment_type text,
+  attachment_url text,
+  is_from_customer boolean not null default true,
   created_at timestamptz default now()
 );
 
@@ -59,13 +63,16 @@ create table customer_media (
   source_message_id text,
   source_url text,
   storage_url text,
+  storage_path text,
   file_name text,
   mime_type text,
+  file_size integer,
   uploaded_at timestamptz default now()
 );
 
 create table webhook_events (
   id uuid primary key default gen_random_uuid(),
+  event_id text,
   event_type text not null,
   sender_psid text,
   message_id text,
@@ -92,6 +99,15 @@ create index idx_conversation_messages_created_at on conversation_messages(creat
 create index idx_customer_media_source_message_id on customer_media(source_message_id);
 create index idx_webhook_events_received_at on webhook_events(received_at);
 
+create unique index if not exists webhook_events_event_id_uidx
+  on webhook_events (event_id);
+
+create unique index if not exists conversation_messages_message_id_uidx
+  on conversation_messages (message_id);
+
+create unique index if not exists customer_media_source_message_id_uidx
+  on customer_media (source_message_id);
+
 alter table conversations
   alter column updated_at set default now();
 
@@ -100,7 +116,9 @@ returns trigger as $$
 begin
   update conversations
   set updated_at = now()
-  where id = NEW.org_id;
+  where customer_psid = NEW.customer_psid
+    and channel = NEW.channel
+    and (org_id = NEW.org_id or NEW.org_id is null);
   return NEW;
 end;
 $$ language plpgsql;
@@ -109,3 +127,16 @@ create trigger conversation_updated_at_trigger
   after insert or update on conversation_messages
   for each row
   execute function touch_conversation_updated_at();
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'conversation_messages'
+  ) then
+    alter publication supabase_realtime add table public.conversation_messages;
+  end if;
+end $$;

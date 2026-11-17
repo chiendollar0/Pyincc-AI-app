@@ -143,7 +143,9 @@ async function handleFacebookMessage(event, message) {
   const messageId = message.mid || message.id || null;
   const senderPsid = message.from?.id || event.sender?.id || 'unknown';
   const attachment = Array.isArray(message.attachments) ? message.attachments[0] : null;
-  const messageText = typeof message.text === 'string' ? message.text : null;
+  const messageText = typeof message.text === 'string'
+    ? message.text
+    : (typeof message.text?.body === 'string' ? message.text.body : null);
   const imageUrl = attachment?.type === 'image' && typeof attachment.payload?.url === 'string'
     ? attachment.payload.url
     : null;
