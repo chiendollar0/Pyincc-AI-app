@@ -28,6 +28,7 @@ Configure the callback URL as `https://<your-domain>/webhook`, set the same `VER
 - `GET /health` — health check.
 - `GET /webhook?hub.mode=subscribe&hub.verify_token=...&hub.challenge=...` — Meta subscription verification.
 - `POST /webhook` — signed Meta events.
+- `GET /messages?limit=30` — requires `x-api-key`; returns recent rows from `conversation_messages` for the Flutter inbox.
 - `POST /send-message` — requires `x-api-key`; accepts `{ "recipientId": "PSID", "text": "..." }` (also accepts `recipient_id`). Call only after a staff member approves the response. The Page token and API key must remain server-side.
 
 Example send request:

@@ -52,6 +52,37 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
+// Fetch recent inbox messages for the Flutter app (requires x-api-key).
+app.get('/messages', async (req, res) => {
+  if (!safeEqual(req.get('x-api-key'), config.apiKey)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
+  try {
+    let query = supabase
+      .from('conversation_messages')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (config.orgId) {
+      query = query.eq('org_id', config.orgId);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error(JSON.stringify({ event: 'fetch_messages_failed', message: error.message }));
+      return res.status(500).json({ error: 'Failed to fetch messages' });
+    }
+
+    return res.json({ messages: data || [] });
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'fetch_messages_exception', message: error.message }));
+    return res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
 // Parse only this endpoint as JSON; Meta signature verification uses the exact raw bytes.
 app.post('/send-message', express.json({ limit: '16kb' }), async (req, res) => {
   if (!safeEqual(req.get('x-api-key'), config.apiKey)) {
@@ -80,6 +111,24 @@ app.post('/send-message', express.json({ limit: '16kb' }), async (req, res) => {
         timeout: 15000,
       }
     );
+
+    const sentMessageId = response.data?.message_id || null;
+    const { error: logError } = await supabase.from('conversation_messages').upsert({
+      org_id: config.orgId,
+      channel: 'facebook',
+      customer_psid: recipientId.trim(),
+      sender: 'staff',
+      message_type: 'text',
+      message_text: text.trim(),
+      message_id: sentMessageId,
+      is_from_customer: false,
+      created_at: new Date().toISOString(),
+    }, { onConflict: 'message_id', ignoreDuplicates: true });
+
+    if (logError) {
+      console.error(JSON.stringify({ event: 'staff_message_persist_failed', message: logError.message }));
+    }
+
     return res.json({ success: true, data: response.data });
   } catch (error) {
     console.error(JSON.stringify({ event: 'send_message_failed', status: error.response?.status }));
