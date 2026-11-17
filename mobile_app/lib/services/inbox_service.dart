@@ -29,7 +29,6 @@ class InboxService {
     final token = authToken.trim();
     if (token.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';
-      headers['x-api-key'] = token;
     }
     return headers;
   }
@@ -184,19 +183,38 @@ class InboxService {
   }
 
   Future<void> sendMessage({
+    required String messageRecordId,
     required String recipientId,
     required String text,
   }) async {
-    late final http.Response response;
+    late final http.Response approveRes;
+    late final http.Response sendRes;
     try {
-      response = await http
+      // Step 1: Persist staff approval (approved_by, approved_at) in database
+      approveRes = await http
+          .post(
+            _webhookEndpoint('/messages/${Uri.encodeComponent(messageRecordId.trim())}/approve'),
+            headers: _authHeaders(json: true),
+            body: jsonEncode({
+              'text': text.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (approveRes.statusCode != 200) {
+        throw Exception(
+          'Chưa duyệt được tin nhắn trong DB (HTTP ${approveRes.statusCode}).',
+        );
+      }
+
+      // Step 2: Server verifies database approval state and sends to Messenger
+      sendRes = await http
           .post(
             _webhookEndpoint('/send-message'),
             headers: _authHeaders(json: true),
             body: jsonEncode({
+              'messageRecordId': messageRecordId.trim(),
               'recipientId': recipientId.trim(),
-              'text': text.trim(),
-              'approved': true,
             }),
           )
           .timeout(const Duration(seconds: 20));
@@ -204,9 +222,9 @@ class InboxService {
       throw Exception('Không kết nối được máy chủ gửi tin: $e');
     }
 
-    if (response.statusCode != 200) {
+    if (sendRes.statusCode != 200) {
       throw Exception(
-        'Chưa gửi được tin nhắn (HTTP ${response.statusCode}). Vui lòng kiểm tra kết nối Facebook.',
+        'Chưa gửi được tin nhắn (HTTP ${sendRes.statusCode}). Vui lòng kiểm tra đăng nhập và kết nối Facebook.',
       );
     }
   }

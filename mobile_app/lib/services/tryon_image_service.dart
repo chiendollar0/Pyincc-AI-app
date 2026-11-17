@@ -21,7 +21,6 @@ class TryOnImageService {
     final token = authToken.trim();
     if (token.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';
-      headers['x-api-key'] = token;
     }
     return headers;
   }
@@ -144,13 +143,29 @@ class TryOnImageService {
       throw Exception('Chưa có ảnh ghép AI để gửi.');
     }
 
-    return _postJson(
-      path: '/send-tryon-image',
+    // Step 1: Upload & record approved_by / approved_at in customer_media table
+    final draftRes = await _postJson(
+      path: '/tryon-drafts',
       body: {
         'recipientId': recipientId.trim(),
         'imageBase64': base64Encode(imageBytes),
         'caption': caption.trim(),
-        'approved': true,
+      },
+      timeout: const Duration(seconds: 30),
+    );
+
+    final media = draftRes['media'];
+    final mediaRecordId =
+        media is Map<String, dynamic> ? (media['id'] ?? '').toString() : '';
+    if (mediaRecordId.isEmpty) {
+      throw Exception('Không tạo được bản ghi duyệt ảnh trên cơ sở dữ liệu.');
+    }
+
+    // Step 2: Server verifies database approval state and sends signed URL to Messenger
+    return _postJson(
+      path: '/send-tryon-image',
+      body: {
+        'mediaRecordId': mediaRecordId,
       },
       timeout: const Duration(seconds: 30),
     );

@@ -12,7 +12,11 @@ alter table public.conversation_messages
   add column if not exists message_id text,
   add column if not exists attachment_type text,
   add column if not exists attachment_url text,
-  add column if not exists is_from_customer boolean not null default true;
+  add column if not exists is_from_customer boolean not null default true,
+  add column if not exists draft_reply text,
+  add column if not exists approval_status text not null default 'pending' check (approval_status in ('pending','approved','sent')),
+  add column if not exists approved_by uuid,
+  add column if not exists approved_at timestamptz;
 
 drop index if exists public.conversation_messages_message_id_uidx;
 create unique index if not exists conversation_messages_message_id_uidx
@@ -20,7 +24,12 @@ create unique index if not exists conversation_messages_message_id_uidx
 
 alter table public.customer_media
   add column if not exists storage_path text,
-  add column if not exists file_size integer;
+  add column if not exists file_size integer,
+  add column if not exists recipient_psid text,
+  add column if not exists caption text,
+  add column if not exists approval_status text not null default 'pending' check (approval_status in ('pending','approved','sent')),
+  add column if not exists approved_by uuid,
+  add column if not exists approved_at timestamptz;
 
 drop index if exists public.customer_media_source_message_id_uidx;
 create unique index if not exists customer_media_source_message_id_uidx

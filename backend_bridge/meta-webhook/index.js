@@ -40,34 +40,42 @@ const supabase = config.supabaseUrl && config.supabaseServiceRoleKey
     })
   : null;
 
+// Middleware 1: Require authenticated Supabase User JWT (Authorization: Bearer <jwt>) for App routes
 async function requireAuth(req, res, next) {
-  const headerKey = req.get('x-api-key');
-  if (config.apiKey && typeof headerKey === 'string' && safeEqual(headerKey, config.apiKey)) {
-    return next();
+  if (!supabase) {
+    return res.status(503).json({
+      error: 'Supabase is not configured on Render (missing SUPABASE_SERVICE_ROLE_KEY)',
+    });
   }
 
   const authHeader = req.get('authorization') || '';
   const bearerMatch = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
   const bearerToken = bearerMatch ? bearerMatch[1].trim() : '';
 
-  if (bearerToken) {
-    if (config.apiKey && safeEqual(bearerToken, config.apiKey)) {
-      return next();
-    }
-    if (supabase) {
-      try {
-        const { data, error } = await supabase.auth.getUser(bearerToken);
-        if (!error && data?.user) {
-          req.authUser = data.user;
-          return next();
-        }
-      } catch {
-        // Fall through to 401
-      }
-    }
+  if (!bearerToken) {
+    return res.status(401).json({ error: 'Unauthorized: missing Bearer JWT' });
   }
 
-  return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { data, error } = await supabase.auth.getUser(bearerToken);
+    if (!error && data?.user) {
+      req.authUser = data.user;
+      return next();
+    }
+  } catch {
+    // Fall through to 401
+  }
+
+  return res.status(401).json({ error: 'Unauthorized: invalid or expired JWT' });
+}
+
+// Middleware 2: Require internal server-to-server x-api-key header matching API_KEY
+function requireInternalApiKey(req, res, next) {
+  const headerKey = req.get('x-api-key');
+  if (config.apiKey && typeof headerKey === 'string' && safeEqual(headerKey, config.apiKey)) {
+    return next();
+  }
+  return res.status(401).json({ error: 'Unauthorized: invalid internal API key' });
 }
 
 app.get('/health', (_req, res) => {
@@ -79,11 +87,18 @@ app.get('/health', (_req, res) => {
   });
 });
 
+// Internal server-to-server status check protected by x-api-key
+app.get('/internal/status', requireInternalApiKey, (_req, res) => {
+  res.json({
+    ok: true,
+    configured: missingConfig.length === 0,
+  });
+});
+
 // ---------------------------------------------------------------------------
-// 1. FACEBOOK LOGIN & AUTOMATIC PAGE TOKEN EXCHANGE (Shop owner 1-click flow)
+// 1. FACEBOOK LOGIN & AUTOMATIC PAGE TOKEN EXCHANGE
 // ---------------------------------------------------------------------------
 
-// Step 1A: Browser OAuth entry point — shop owner taps "Kết nối với Facebook"
 app.get('/auth/facebook', (req, res) => {
   if (!config.metaAppId) {
     return res.status(503).json({
@@ -109,7 +124,6 @@ app.get('/auth/facebook', (req, res) => {
   return res.redirect(oauthUrl.toString());
 });
 
-// Step 1B: OAuth callback — exchanges code -> User Token -> Page Access Tokens automatically
 app.get('/auth/facebook/callback', async (req, res) => {
   const code = req.query.code;
   const orgId = typeof req.query.state === 'string' && req.query.state.trim()
@@ -160,8 +174,6 @@ app.get('/auth/facebook/callback', async (req, res) => {
   }
 });
 
-// Step 1C: Direct API for Flutter App — accepts User Access Token from Facebook Login SDK
-// and exchanges it for Page Access Tokens completely server-side.
 app.post('/auth/facebook/exchange-token', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
   if (!config.metaAppSecret) {
     return res.status(503).json({ error: 'Server chưa cấu hình META_APP_SECRET' });
@@ -188,17 +200,7 @@ app.post('/auth/facebook/exchange-token', requireAuth, express.json({ limit: '16
   }
 });
 
-// List connected Fanpages for the Flutter UI (never exposes page_access_token)
-app.get('/connected-pages', requireAuth, async (req, res) => {
-  if (!supabase) {
-    if (config.pageId) {
-      return res.json({
-        pages: [{ page_id: config.pageId, page_name: 'Fanpage mặc định (Render)' }],
-      });
-    }
-    return res.json({ pages: [] });
-  }
-
+app.get('/connected-pages', requireAuth, async (_req, res) => {
   try {
     const { data, error } = await supabase
       .from('connected_pages')
@@ -206,22 +208,17 @@ app.get('/connected-pages', requireAuth, async (req, res) => {
       .order('updated_at', { ascending: false });
 
     if (error) {
-      return res.json({
-        pages: config.pageId
-          ? [{ page_id: config.pageId, page_name: 'Fanpage mặc định (Render)' }]
-          : [],
-      });
+      return res.status(500).json({ error: 'Failed to load connected pages' });
     }
     return res.json({ pages: data || [] });
   } catch {
-    return res.json({ pages: [] });
+    return res.status(500).json({ error: 'Failed to load connected pages' });
   }
 });
 
 async function exchangeUserTokenAndSavePages(userAccessToken, orgId) {
   let tokenToUse = userAccessToken;
 
-  // Exchange short-lived user token for a 60-day long-lived user token when META_APP_ID is present
   if (config.metaAppId && config.metaAppSecret) {
     try {
       const longRes = await axios.get(
@@ -267,7 +264,6 @@ async function exchangeUserTokenAndSavePages(userAccessToken, orgId) {
   for (const page of rawPages) {
     if (!page.id || !page.access_token) continue;
 
-    // Automatically subscribe the Page to webhook events
     try {
       const pageProof = crypto
         .createHmac('sha256', config.metaAppSecret)
@@ -310,7 +306,6 @@ async function exchangeUserTokenAndSavePages(userAccessToken, orgId) {
       }
     }
 
-    // Also update in-memory fallback so immediate sends work even before DB migration
     config.pageId = row.page_id;
     config.pageAccessToken = row.page_access_token;
     savedPages.push({ page_id: row.page_id, page_name: row.page_name });
@@ -340,7 +335,7 @@ async function resolvePageCredentials(requestedPageId) {
         };
       }
     } catch {
-      // Fallback to env config below
+      // Fallback below
     }
   }
 
@@ -354,109 +349,67 @@ async function resolvePageCredentials(requestedPageId) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. SALON SETTINGS, BOOKINGS & TRY-ON DELIVERY ENDPOINTS
+// 2. SALON SETTINGS & BOOKINGS (Require Supabase User JWT)
 // ---------------------------------------------------------------------------
 
-const memoryStore = {
-  onDuty: true,
-  consultationScript:
-    'Mày sợi Hairstroke 3tr5, Môi Collagen 4tr. Ca khó sửa mày trổ xanh/đỏ cần xin ảnh cận mặt để Master lên phác đồ.',
-  bookings: [
-    {
-      id: 'default-1',
-      customer_name: 'Chị Lan Anh',
-      customer_phone: '0909xxxxxx',
-      service_name: 'Mày Hairstroke Nâu Tây • Master Linh',
-      scheduled_at: '14:30',
-      status: 'confirmed',
-    },
-    {
-      id: 'default-2',
-      customer_name: 'Chị Minh Thư (FB)',
-      customer_phone: '',
-      service_name: 'Xử lý mày trổ xanh + Đi sợi • Master Linh',
-      scheduled_at: '16:00',
-      status: 'pending',
-    },
-  ],
-};
+app.get('/settings', requireAuth, async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('salon_settings')
+      .select('on_duty, consultation_script, updated_at')
+      .eq('key', 'default')
+      .maybeSingle();
 
-app.get('/settings', requireAuth, async (req, res) => {
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('salon_settings')
-        .select('on_duty, consultation_script, updated_at')
-        .eq('key', 'default')
-        .maybeSingle();
-      if (!error && data) {
-        memoryStore.onDuty = Boolean(data.on_duty);
-        memoryStore.consultationScript = String(data.consultation_script || '');
-        return res.json({
-          onDuty: memoryStore.onDuty,
-          consultationScript: memoryStore.consultationScript,
-          persisted: true,
-        });
-      }
-    } catch {
-      // Fallback to memoryStore
+    if (error) {
+      return res.status(500).json({ error: 'Failed to load settings' });
     }
+
+    return res.json({
+      onDuty: data ? Boolean(data.on_duty) : true,
+      consultationScript: data ? String(data.consultation_script || '') : '',
+    });
+  } catch {
+    return res.status(500).json({ error: 'Failed to load settings' });
   }
-  return res.json({
-    onDuty: memoryStore.onDuty,
-    consultationScript: memoryStore.consultationScript,
-    persisted: Boolean(supabase),
-  });
 });
 
 app.put('/settings', requireAuth, express.json({ limit: '32kb' }), async (req, res) => {
-  if (typeof req.body?.onDuty === 'boolean') {
-    memoryStore.onDuty = req.body.onDuty;
-  }
-  if (typeof req.body?.consultationScript === 'string') {
-    memoryStore.consultationScript = req.body.consultationScript.trim();
-  }
+  const onDuty = typeof req.body?.onDuty === 'boolean' ? req.body.onDuty : true;
+  const consultationScript = typeof req.body?.consultationScript === 'string'
+    ? req.body.consultationScript.trim()
+    : '';
 
-  if (supabase) {
-    try {
-      const { error } = await supabase.from('salon_settings').upsert({
-        key: 'default',
-        org_id: config.orgId,
-        on_duty: memoryStore.onDuty,
-        consultation_script: memoryStore.consultationScript,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'key' });
-      if (error) {
-        console.warn(JSON.stringify({ event: 'save_settings_db_warning', message: error.message }));
-      }
-    } catch (e) {
-      console.warn(JSON.stringify({ event: 'save_settings_exception', message: e.message }));
-    }
+  const { error } = await supabase.from('salon_settings').upsert({
+    key: 'default',
+    org_id: config.orgId,
+    on_duty: onDuty,
+    consultation_script: consultationScript,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'key' });
+
+  if (error) {
+    return res.status(500).json({ error: 'Failed to save settings' });
   }
 
   return res.json({
     success: true,
-    onDuty: memoryStore.onDuty,
-    consultationScript: memoryStore.consultationScript,
+    onDuty,
+    consultationScript,
   });
 });
 
-app.get('/bookings', requireAuth, async (req, res) => {
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('bookings')
-        .select('*')
-        .order('scheduled_at', { ascending: true })
-        .limit(50);
-      if (!error && Array.isArray(data) && data.length > 0) {
-        return res.json({ bookings: data });
-      }
-    } catch {
-      // Fallback to memoryStore
-    }
+app.get('/bookings', requireAuth, async (_req, res) => {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('*')
+    .order('scheduled_at', { ascending: true })
+    .limit(50);
+
+  if (error) {
+    return res.status(500).json({ error: 'Failed to fetch bookings' });
   }
-  return res.json({ bookings: memoryStore.bookings });
+
+  return res.json({ bookings: data || [] });
 });
 
 app.post('/bookings', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
@@ -479,51 +432,150 @@ app.post('/bookings', requireAuth, express.json({ limit: '16kb' }), async (req, 
     scheduledIso = new Date(timeSlot).toISOString();
   }
 
-  const bookingRow = {
-    org_id: config.orgId,
-    customer_name: customerName,
-    customer_phone: customerPhone,
-    service_name: serviceName,
-    scheduled_at: scheduledIso,
-    status: 'confirmed',
-  };
+  const { data, error } = await supabase
+    .from('bookings')
+    .insert({
+      org_id: config.orgId,
+      customer_name: customerName,
+      customer_phone: customerPhone,
+      service_name: serviceName,
+      scheduled_at: scheduledIso,
+      status: 'confirmed',
+    })
+    .select('*')
+    .single();
 
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('bookings')
-        .insert(bookingRow)
-        .select('*')
-        .single();
-      if (!error && data) {
-        memoryStore.bookings.unshift(data);
-        return res.json({ success: true, booking: data });
-      }
-    } catch (e) {
-      console.warn(JSON.stringify({ event: 'insert_booking_warning', message: e.message }));
-    }
+  if (error) {
+    return res.status(500).json({ error: 'Failed to create booking' });
   }
 
-  const fallbackRow = {
-    id: crypto.randomUUID(),
-    ...bookingRow,
-    scheduled_at: timeSlot || scheduledIso,
-  };
-  memoryStore.bookings.unshift(fallbackRow);
-  return res.json({ success: true, booking: fallbackRow });
+  return res.json({ success: true, booking: data });
 });
 
-app.post('/send-tryon-image', requireAuth, express.json({ limit: '15mb' }), async (req, res) => {
+// ---------------------------------------------------------------------------
+// 3. HUMAN-IN-THE-LOOP APPROVAL & MESSAGING (Database-verified approval)
+// ---------------------------------------------------------------------------
+
+// Step 3A: Staff approves a reply draft in database (records approved_by & approved_at)
+app.post('/messages/:id/approve', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
+  const messageRowId = String(req.params.id || '').trim();
+  const draftReply = String(req.body?.text || req.body?.draftReply || '').trim();
+
+  if (!messageRowId || !draftReply) {
+    return res.status(400).json({ error: 'message id and text are required' });
+  }
+  if (draftReply.length > 2000) {
+    return res.status(400).json({ error: 'text must be 2000 characters or fewer' });
+  }
+
+  const approvedAt = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('conversation_messages')
+    .update({
+      draft_reply: draftReply,
+      approval_status: 'approved',
+      approved_by: req.authUser.id,
+      approved_at: approvedAt,
+    })
+    .eq('id', messageRowId)
+    .select('id, customer_psid, draft_reply, approval_status, approved_by, approved_at')
+    .single();
+
+  if (error || !data) {
+    return res.status(404).json({ error: 'Message record not found or could not be approved' });
+  }
+
+  return res.json({ success: true, approval: data });
+});
+
+// Step 3B: Send message ONLY after verifying database record has approval_status === 'approved'
+app.post('/send-message', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
+  const messageRecordId = String(req.body?.messageRecordId || req.body?.message_record_id || '').trim();
+  const requestedPageId = req.body?.pageId || req.body?.page_id;
+
+  if (!messageRecordId) {
+    return res.status(400).json({
+      error: 'messageRecordId is required; approve the message via POST /messages/:id/approve first',
+    });
+  }
+
+  // Read approval state directly from database — never trust body flags
+  const { data: msgRecord, error: fetchErr } = await supabase
+    .from('conversation_messages')
+    .select('id, customer_psid, draft_reply, approval_status, approved_by, approved_at')
+    .eq('id', messageRecordId)
+    .single();
+
+  if (fetchErr || !msgRecord) {
+    return res.status(404).json({ error: 'Message record not found in database' });
+  }
+
+  if (
+    msgRecord.approval_status !== 'approved' ||
+    !msgRecord.approved_by ||
+    !msgRecord.approved_at ||
+    !msgRecord.draft_reply
+  ) {
+    return res.status(403).json({
+      error: 'Message has not been approved in database (missing approved status, approved_by, or approved_at)',
+    });
+  }
+
+  const pageCreds = await resolvePageCredentials(requestedPageId);
+  if (!pageCreds) {
+    return res.status(503).json({
+      error: 'Chưa có Fanpage nào được kết nối.',
+    });
+  }
+
+  try {
+    const response = await axios.post(
+      `https://graph.facebook.com/${config.graphApiVersion}/${pageCreds.pageId}/messages`,
+      {
+        recipient: { id: String(msgRecord.customer_psid).trim() },
+        messaging_type: 'RESPONSE',
+        message: { text: String(msgRecord.draft_reply).trim() },
+      },
+      {
+        headers: { Authorization: `Bearer ${pageCreds.pageAccessToken}` },
+        timeout: 15000,
+      }
+    );
+
+    await supabase
+      .from('conversation_messages')
+      .update({ approval_status: 'sent' })
+      .eq('id', msgRecord.id);
+
+    const sentMessageId = response.data?.message_id || null;
+    await supabase.from('conversation_messages').upsert({
+      org_id: config.orgId,
+      channel: 'facebook',
+      customer_psid: String(msgRecord.customer_psid).trim(),
+      sender: 'staff',
+      message_type: 'text',
+      message_text: String(msgRecord.draft_reply).trim(),
+      message_id: sentMessageId,
+      is_from_customer: false,
+      approval_status: 'sent',
+      approved_by: msgRecord.approved_by,
+      approved_at: msgRecord.approved_at,
+      created_at: new Date().toISOString(),
+    }, { onConflict: 'message_id', ignoreDuplicates: true });
+
+    return res.json({ success: true, data: response.data });
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'send_message_failed', status: error.response?.status }));
+    return res.status(502).json({ error: 'Failed to send message through Meta' });
+  }
+});
+
+// Step 3C: Create & approve Try-On image record in database, then send after verifying DB approval
+app.post('/tryon-drafts', requireAuth, express.json({ limit: '15mb' }), async (req, res) => {
   const recipientId = String(req.body?.recipientId || req.body?.recipient_id || '').trim();
   const imageBase64 = String(req.body?.imageBase64 || req.body?.image_base64 || '').trim();
   const caption = String(req.body?.caption || '').trim();
-  const approved = req.body?.approved === true;
 
-  if (!approved) {
-    return res.status(400).json({
-      error: 'Human-in-the-loop approval (approved: true) is required before sending Try-On image.',
-    });
-  }
   if (!imageBase64) {
     return res.status(400).json({ error: 'imageBase64 is required' });
   }
@@ -538,31 +590,75 @@ app.post('/send-tryon-image', requireAuth, express.json({ limit: '15mb' }), asyn
     return res.status(400).json({ error: 'Image size must be under 15 MB' });
   }
 
-  let publicUrl = null;
   const storagePath = `tryon/${crypto.randomUUID()}.jpg`;
-  if (supabase) {
-    const { error: uploadError } = await uploadWithRetry(storagePath, buffer, 'image/jpeg');
-    if (uploadError) {
-      return res.status(502).json({ error: `Upload Try-On image failed: ${uploadError.message}` });
-    }
-    publicUrl = await createSignedOrPublicUrl(storagePath);
+  const { error: uploadError } = await uploadWithRetry(storagePath, buffer, 'image/jpeg');
+  if (uploadError) {
+    return res.status(502).json({ error: `Upload Try-On image failed: ${uploadError.message}` });
+  }
 
-    await supabase.from('customer_media').insert({
+  const approvedAt = new Date().toISOString();
+  const { data: mediaRecord, error: insertError } = await supabase
+    .from('customer_media')
+    .insert({
       source_channel: 'mobile',
       source_message_id: storagePath,
-      storage_url: publicUrl,
       storage_path: storagePath,
       file_name: storagePath,
       mime_type: 'image/jpeg',
       file_size: buffer.length,
-      uploaded_at: new Date().toISOString(),
+      recipient_psid: recipientId || null,
+      caption: caption || null,
+      approval_status: 'approved',
+      approved_by: req.authUser.id,
+      approved_at: approvedAt,
+      uploaded_at: approvedAt,
+    })
+    .select('id, storage_path, approval_status, approved_by, approved_at')
+    .single();
+
+  if (insertError || !mediaRecord) {
+    return res.status(500).json({ error: 'Failed to persist approved Try-On media record' });
+  }
+
+  return res.json({ success: true, media: mediaRecord });
+});
+
+app.post('/send-tryon-image', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
+  const mediaRecordId = String(req.body?.mediaRecordId || req.body?.media_record_id || '').trim();
+  if (!mediaRecordId) {
+    return res.status(400).json({
+      error: 'mediaRecordId is required; create & approve the Try-On draft via POST /tryon-drafts first',
     });
   }
 
-  // If recipientId is a real Facebook PSID and a Page is connected, send via Messenger Graph API
+  // Verify approval status, approved_by, and approved_at directly in the database
+  const { data: mediaRow, error: fetchErr } = await supabase
+    .from('customer_media')
+    .select('id, storage_path, recipient_psid, caption, approval_status, approved_by, approved_at')
+    .eq('id', mediaRecordId)
+    .single();
+
+  if (fetchErr || !mediaRow) {
+    return res.status(404).json({ error: 'Try-On media record not found in database' });
+  }
+
+  if (
+    mediaRow.approval_status !== 'approved' ||
+    !mediaRow.approved_by ||
+    !mediaRow.approved_at ||
+    !mediaRow.storage_path
+  ) {
+    return res.status(403).json({
+      error: 'Try-On image has not been approved in database (missing approved status, approved_by, or approved_at)',
+    });
+  }
+
+  const signedUrl = await createSignedUrl(mediaRow.storage_path, 3600);
+  const recipientId = String(mediaRow.recipient_psid || '').trim();
+  const caption = String(mediaRow.caption || '').trim();
   const pageCreds = await resolvePageCredentials(req.body?.pageId);
-  const isRealPsid = recipientId && !recipientId.startsWith('DEMO_');
-  if (isRealPsid && pageCreds && publicUrl) {
+
+  if (recipientId && pageCreds) {
     try {
       await axios.post(
         `https://graph.facebook.com/${config.graphApiVersion}/${pageCreds.pageId}/messages`,
@@ -572,7 +668,7 @@ app.post('/send-tryon-image', requireAuth, express.json({ limit: '15mb' }), asyn
           message: {
             attachment: {
               type: 'image',
-              payload: { url: publicUrl, is_reusable: true },
+              payload: { url: signedUrl, is_reusable: false },
             },
           },
         },
@@ -602,34 +698,22 @@ app.post('/send-tryon-image', requireAuth, express.json({ limit: '15mb' }), asyn
     }
   }
 
-  if (supabase && recipientId) {
-    await supabase.from('conversation_messages').insert({
-      org_id: config.orgId,
-      channel: 'facebook',
-      customer_psid: recipientId,
-      sender: 'staff',
-      message_type: 'image',
-      message_text: caption || 'Đã gửi ảnh ghép mẫu AI',
-      image_url: publicUrl,
-      attachment_type: 'image',
-      attachment_url: publicUrl,
-      is_from_customer: false,
-      created_at: new Date().toISOString(),
-    });
-  }
+  await supabase
+    .from('customer_media')
+    .update({ approval_status: 'sent' })
+    .eq('id', mediaRow.id);
 
   return res.json({
     success: true,
-    imageUrl: publicUrl,
-    deliveredToMessenger: Boolean(isRealPsid && pageCreds && publicUrl),
+    signedUrl,
+    deliveredToMessenger: Boolean(recipientId && pageCreds),
   });
 });
 
 // ---------------------------------------------------------------------------
-// 3. WEBHOOK & MESSAGING ENDPOINTS
+// 4. WEBHOOK & INBOX FETCH ENDPOINTS
 // ---------------------------------------------------------------------------
 
-// Meta webhook subscription verification handshake.
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -641,14 +725,7 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-// Fetch recent inbox messages for the Flutter app.
 app.get('/messages', requireAuth, async (req, res) => {
-  if (!supabase) {
-    return res.status(503).json({
-      error: 'Supabase is not configured on Render (missing SUPABASE_SERVICE_ROLE_KEY)',
-    });
-  }
-
   const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
   try {
     let query = supabase
@@ -671,71 +748,6 @@ app.get('/messages', requireAuth, async (req, res) => {
   } catch (error) {
     console.error(JSON.stringify({ event: 'fetch_messages_exception', message: error.message }));
     return res.status(500).json({ error: 'Failed to fetch messages' });
-  }
-});
-
-// Parse only this endpoint as JSON; Meta signature verification uses the exact raw bytes.
-app.post('/send-message', requireAuth, express.json({ limit: '16kb' }), async (req, res) => {
-  const recipientId = req.body?.recipientId || req.body?.recipient_id;
-  const text = req.body?.text;
-  const approved = req.body?.approved === true;
-  const requestedPageId = req.body?.pageId || req.body?.page_id;
-  if (!approved) {
-    return res.status(400).json({
-      error: 'Human-in-the-loop approval (approved: true) is required before sending.',
-    });
-  }
-  if (typeof recipientId !== 'string' || !recipientId.trim() || typeof text !== 'string' || !text.trim()) {
-    return res.status(400).json({ error: 'recipientId and text are required' });
-  }
-  if (text.length > 2000) {
-    return res.status(400).json({ error: 'text must be 2000 characters or fewer' });
-  }
-
-  const pageCreds = await resolvePageCredentials(requestedPageId);
-  if (!pageCreds) {
-    return res.status(503).json({
-      error: 'Chưa có Fanpage nào được kết nối. Chủ tiệm vui lòng bấm "Kết nối với Facebook" trên ứng dụng.',
-    });
-  }
-
-  try {
-    const response = await axios.post(
-      `https://graph.facebook.com/${config.graphApiVersion}/${pageCreds.pageId}/messages`,
-      {
-        recipient: { id: recipientId.trim() },
-        messaging_type: 'RESPONSE',
-        message: { text: text.trim() },
-      },
-      {
-        headers: { Authorization: `Bearer ${pageCreds.pageAccessToken}` },
-        timeout: 15000,
-      }
-    );
-
-    const sentMessageId = response.data?.message_id || null;
-    if (supabase) {
-      const { error: logError } = await supabase.from('conversation_messages').upsert({
-        org_id: config.orgId,
-        channel: 'facebook',
-        customer_psid: recipientId.trim(),
-        sender: 'staff',
-        message_type: 'text',
-        message_text: text.trim(),
-        message_id: sentMessageId,
-        is_from_customer: false,
-        created_at: new Date().toISOString(),
-      }, { onConflict: 'message_id', ignoreDuplicates: true });
-
-      if (logError) {
-        console.error(JSON.stringify({ event: 'staff_message_persist_failed', message: logError.message }));
-      }
-    }
-
-    return res.json({ success: true, data: response.data });
-  } catch (error) {
-    console.error(JSON.stringify({ event: 'send_message_failed', status: error.response?.status }));
-    return res.status(502).json({ error: 'Failed to send message through Meta' });
   }
 });
 
@@ -809,7 +821,7 @@ async function handleFacebookMessage(event, message) {
     uploaded = await uploadImageToSupabase(imageUrl, messageId || crypto.randomUUID());
   }
 
-  const storedUrl = uploaded?.publicUrl || null;
+  const storedUrl = uploaded?.signedUrl || null;
   const eventId = messageId || crypto.createHash('sha256').update(JSON.stringify(message)).digest('hex');
   const receivedAt = new Date().toISOString();
 
@@ -838,6 +850,7 @@ async function handleFacebookMessage(event, message) {
     attachment_type: attachment?.type || null,
     attachment_url: storedUrl,
     is_from_customer: true,
+    approval_status: 'pending',
     created_at: receivedAt,
   }, { onConflict: 'message_id', ignoreDuplicates: true });
   if (messageError) throw new Error(`Could not persist conversation message: ${messageError.message}`);
@@ -852,6 +865,7 @@ async function handleFacebookMessage(event, message) {
       file_name: uploaded.path,
       mime_type: uploaded.mimeType,
       file_size: uploaded.size,
+      approval_status: 'pending',
       uploaded_at: receivedAt,
     }, { onConflict: 'source_message_id', ignoreDuplicates: true });
     if (mediaError) throw new Error(`Could not persist customer media: ${mediaError.message}`);
@@ -888,24 +902,23 @@ async function uploadImageToSupabase(remoteUrl, messageId) {
   const { error } = await uploadWithRetry(path, buffer, mimeType);
   if (error) throw new Error(`Supabase Storage upload failed: ${error.message}`);
 
-  const signedUrl = await createSignedOrPublicUrl(path);
-  return { path, publicUrl: signedUrl, mimeType, size: buffer.length };
+  const signedUrl = await createSignedUrl(path, 3600);
+  return { path, signedUrl, mimeType, size: buffer.length };
 }
 
-async function createSignedOrPublicUrl(path, expiresInSeconds = 3600) {
-  if (!supabase) return null;
-  try {
-    const { data, error } = await supabase.storage
-      .from(config.storageBucket)
-      .createSignedUrl(path, expiresInSeconds);
-    if (!error && data?.signedUrl) {
-      return data.signedUrl;
-    }
-  } catch {
-    // Fallback below
+// Strictly generates a temporary Signed URL for private bucket objects (never falls back to public URL)
+async function createSignedUrl(path, expiresInSeconds = 3600) {
+  if (!supabase) {
+    throw new Error('Supabase client is not initialized');
   }
-  const { data } = supabase.storage.from(config.storageBucket).getPublicUrl(path);
-  return data?.publicUrl || null;
+  const { data, error } = await supabase.storage
+    .from(config.storageBucket)
+    .createSignedUrl(path, expiresInSeconds);
+
+  if (error || !data?.signedUrl) {
+    throw new Error(`Could not create signed URL for ${path}: ${error?.message || 'unknown error'}`);
+  }
+  return data.signedUrl;
 }
 
 async function uploadWithRetry(path, buffer, mimeType, maxRetries = 3) {

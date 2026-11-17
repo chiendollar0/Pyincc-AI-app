@@ -54,6 +54,10 @@ create table conversation_messages (
   attachment_type text,
   attachment_url text,
   is_from_customer boolean not null default true,
+  draft_reply text,
+  approval_status text not null default 'pending' check (approval_status in ('pending','approved','sent')),
+  approved_by uuid,
+  approved_at timestamptz,
   created_at timestamptz default now()
 );
 
@@ -67,6 +71,11 @@ create table customer_media (
   file_name text,
   mime_type text,
   file_size integer,
+  recipient_psid text,
+  caption text,
+  approval_status text not null default 'pending' check (approval_status in ('pending','approved','sent')),
+  approved_by uuid,
+  approved_at timestamptz,
   uploaded_at timestamptz default now()
 );
 

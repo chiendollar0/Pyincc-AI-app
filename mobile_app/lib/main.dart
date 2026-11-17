@@ -281,6 +281,7 @@ class _AiTriageInboxScreenState extends State<AiTriageInboxScreen> {
     setState(() => _sendingIds.add(chatId));
     try {
       await widget.inboxService.sendMessage(
+        messageRecordId: chatId,
         recipientId: psid,
         text: approvedText,
       );
