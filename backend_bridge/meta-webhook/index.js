@@ -12,7 +12,7 @@ const config = {
   metaAppSecret: process.env.META_APP_SECRET,
   verifyToken: process.env.VERIFY_TOKEN,
   apiKey: process.env.API_KEY,
-  graphApiVersion: process.env.META_GRAPH_API_VERSION || 'v19.0',
+  graphApiVersion: process.env.META_GRAPH_API_VERSION || 'v27.0',
   storageBucket: process.env.SUPABASE_STORAGE_BUCKET || 'customer-media',
   publicBaseUrl: process.env.PUBLIC_BASE_URL || 'https://pyincc-ai-app.onrender.com',
 };
@@ -153,6 +153,29 @@ function verifyMetaSignature(rawBody, signature) {
 }
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'pyincc-meta-webhook' }));
+app.get('/privacy', (_req, res) => res.type('html').send(
+  '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Chính sách Quyền riêng tư — PyinccCRM</title></head>' +
+  '<body style="font-family:sans-serif;max-width:720px;margin:32px auto;padding:0 16px;line-height:1.6;">' +
+  '<h1>Chính sách Quyền riêng tư — PyinccCRM</h1>' +
+  '<p>PyinccCRM chỉ thu thập và xử lý tin nhắn Fanpage, hình ảnh khách hàng gửi qua Messenger và thông tin quản trị viên Fanpage do chủ tiệm cấp quyền nhằm mục đích tư vấn chăm sóc khách hàng và đặt lịch hẹn.</p>' +
+  '<p>Mọi dữ liệu hội thoại và ảnh khách hàng được lưu trữ bảo mật trên Supabase Private Storage và không chia sẻ cho bên thứ ba ngoài phạm vi vận hành của tiệm.</p>' +
+  '<p>Liên hệ hỗ trợ quyền riêng tư: phanhungkg03@gmail.com</p></body></html>'
+));
+app.get('/terms', (_req, res) => res.type('html').send(
+  '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Điều khoản Dịch vụ — PyinccCRM</title></head>' +
+  '<body style="font-family:sans-serif;max-width:720px;margin:32px auto;padding:0 16px;line-height:1.6;">' +
+  '<h1>Điều khoản Dịch vụ — PyinccCRM</h1>' +
+  '<p>PyinccCRM là công cụ hỗ trợ chủ tiệm và nhân viên quản lý hội thoại Messenger, lịch hẹn và mô phỏng mẫu tư vấn. Chủ tiệm chịu trách nhiệm kiểm duyệt mọi nội dung trước khi gửi tới khách hàng.</p>' +
+  '<p>Liên hệ: phanhungkg03@gmail.com</p></body></html>'
+));
+app.get('/data-deletion', (_req, res) => res.type('html').send(
+  '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Hướng dẫn Xóa Dữ liệu — PyinccCRM</title></head>' +
+  '<body style="font-family:sans-serif;max-width:720px;margin:32px auto;padding:0 16px;line-height:1.6;">' +
+  '<h1>Hướng dẫn Xóa Dữ liệu Người dùng — PyinccCRM</h1>' +
+  '<p>Để thu hồi quyền và xóa toàn bộ dữ liệu liên kết Fanpage:</p>' +
+  '<ol><li>Vào Cài đặt Facebook → Tiện ích tích hợp cho doanh nghiệp (Business Integrations) → chọn <strong>PyinccCRM</strong> → bấm <strong>Gỡ</strong>. Hệ thống sẽ tự động nhận tín hiệu thu hồi qua Deauthorize Callback và xóa Page Token đã lưu.</li>' +
+  '<li>Hoặc gửi email yêu cầu xóa toàn bộ dữ liệu hội thoại về <strong>phanhungkg03@gmail.com</strong>, yêu cầu sẽ được xử lý trong vòng 48 giờ.</li></ol></body></html>'
+));
 app.get('/internal/status', requireInternalApiKey, (_req, res) =>
   res.json({ ok: true, configured: missingConfig.length === 0 }));
 app.get('/internal/webhook-status', requireInternalApiKey, (_req, res) =>
