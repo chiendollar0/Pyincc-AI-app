@@ -1,0 +1,15 @@
+{
+  "project": "Pyincc",
+  "application": "PyinccAICus",
+  "repository": "chiendollar0/Pyincc-AI-app",
+  "version_role": "build",
+  "sync": {
+    "source_of_truth": "chiendollar0/Pyincc-AI-app",
+    "areas": [
+      "ui",
+      "logo",
+      "data",
+      "icons"
+    ]
+  }
+}
