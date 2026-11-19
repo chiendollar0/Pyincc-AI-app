@@ -28,39 +28,25 @@ jobs:
 
       - name: Install dependencies
         working-directory: mobile_app
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Analyze
         working-directory: mobile_app
         run: flutter analyze --no-fatal-infos
 
-      - name: Run functional widget tests
+      - name: Run tests
         working-directory: mobile_app
         run: flutter test
 
       - name: Build debug APK
         working-directory: mobile_app
         env:
-          FB_CLIENT_TOKEN: ${{ secrets.FB_CLIENT_TOKEN }}
           ORG_GRADLE_PROJECT_FB_CLIENT_TOKEN: ${{ secrets.FB_CLIENT_TOKEN }}
         run: |
           flutter build apk --debug \
-            --dart-define=SUPABASE_URL=${{ vars.SUPABASE_URL || 'https://ihufvqrxdswgbagzhydb.supabase.co' }} \
-            --dart-define=SUPABASE_ANON_KEY=${{ vars.SUPABASE_ANON_KEY }} \
-            --dart-define=TRYON_API_URL=${{ vars.TRYON_API_URL || 'https://pyincccrm.bothelper.vn' }}
-
-      - name: Print Android Facebook Key Hash
-        run: |
-          if [ -f "$HOME/.android/debug.keystore" ]; then
-            KEY_HASH=$(keytool -exportcert -alias androiddebugkey -keystore "$HOME/.android/debug.keystore" -storepass android 2>/dev/null | openssl sha1 -binary | openssl base64)
-            echo "=========================================="
-            echo "Android Debug Facebook Key Hash: $KEY_HASH"
-            echo "=========================================="
-            echo "### Android Debug Facebook Key Hash" >> "$GITHUB_STEP_SUMMARY"
-            echo "\`$KEY_HASH\`" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "debug.keystore not found at $HOME/.android/debug.keystore"
-          fi
+            --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }} \
+            --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }} \
+            --dart-define=TRYON_API_URL=${{ secrets.TRYON_API_URL }}
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
