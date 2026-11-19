@@ -77,6 +77,27 @@ jobs:
             --dart-define=SUPABASE_ANON_KEY=${{ vars.PROD_SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY }} \
             --dart-define=TRYON_API_URL=${{ vars.PROD_API_URL || vars.TRYON_API_URL || 'https://pyincccrm.bothelper.vn' }}
 
+      - name: Print Android Release Facebook Key Hash
+        env:
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -f "mobile_app/android/app/pyincc-release.jks" ]; then
+            KEY_HASH=$(keytool -exportcert -alias "$ANDROID_KEY_ALIAS" -keystore mobile_app/android/app/pyincc-release.jks -storepass "$ANDROID_STORE_PASSWORD" 2>/dev/null | openssl sha1 -binary | openssl base64)
+            echo "=========================================="
+            echo "Android Release Facebook Key Hash: $KEY_HASH"
+            echo "=========================================="
+            echo "### Android Release Facebook Key Hash" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`$KEY_HASH\`" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f "$HOME/.android/debug.keystore" ]; then
+            KEY_HASH=$(keytool -exportcert -alias androiddebugkey -keystore "$HOME/.android/debug.keystore" -storepass android 2>/dev/null | openssl sha1 -binary | openssl base64)
+            echo "=========================================="
+            echo "Android Fallback Debug Facebook Key Hash: $KEY_HASH"
+            echo "=========================================="
+            echo "### Android Fallback Debug Facebook Key Hash" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`$KEY_HASH\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:

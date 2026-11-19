@@ -49,6 +49,19 @@ jobs:
             --dart-define=SUPABASE_ANON_KEY=${{ vars.SUPABASE_ANON_KEY }} \
             --dart-define=TRYON_API_URL=${{ vars.TRYON_API_URL || 'https://pyincccrm.bothelper.vn' }}
 
+      - name: Print Android Facebook Key Hash
+        run: |
+          if [ -f "$HOME/.android/debug.keystore" ]; then
+            KEY_HASH=$(keytool -exportcert -alias androiddebugkey -keystore "$HOME/.android/debug.keystore" -storepass android 2>/dev/null | openssl sha1 -binary | openssl base64)
+            echo "=========================================="
+            echo "Android Debug Facebook Key Hash: $KEY_HASH"
+            echo "=========================================="
+            echo "### Android Debug Facebook Key Hash" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`$KEY_HASH\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "debug.keystore not found at $HOME/.android/debug.keystore"
+          fi
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
