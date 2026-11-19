@@ -1,10 +1,15 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'api_client.dart';
+import 'image_preprocessor.dart';
+
+Future<Uint8List> _prepareImageBytes(String filePath) {
+  return ImagePreprocessor.prepare(File(filePath));
+}
 
 class TryOnImageService {
   final String apiBaseUrl;
@@ -40,7 +45,13 @@ class TryOnImageService {
       'https://ihufvqrxdswgbagzhydb.supabase.co/functions/v1/tryon-analyze',
     );
 
-    final bytes = await image.readAsBytes();
+    final Uint8List bytes;
+    try {
+      bytes = await compute(_prepareImageBytes, image.path);
+    } on FormatException catch (err) {
+      throw ApiException(0, err.message);
+    }
+
     if (bytes.isEmpty) {
       throw const ApiException(0, 'Ảnh mặt khách rỗng hoặc không đọc được.');
     }
@@ -61,16 +72,35 @@ class TryOnImageService {
       throw const SocketException('analyze_network_unreachable');
     }
 
+    if (response.statusCode == 413) {
+      throw const ApiException(
+        0,
+        'Ảnh quá lớn. Vui lòng chụp lại ở độ phân giải thấp hơn.',
+      );
+    }
+    if (response.statusCode == 415) {
+      throw const ApiException(
+        0,
+        'Định dạng ảnh không được hỗ trợ. Vui lòng chọn ảnh JPEG, PNG hoặc WebP.',
+      );
+    }
     if (response.statusCode != 200) {
       throw ApiException(response.statusCode, 'Chưa thể phân tích khuôn mặt.');
     }
 
     final decoded = jsonDecode(response.body);
-    if (decoded is! Map<String, dynamic> || decoded['analysis'] is! Map) {
+    if (decoded is! Map<String, dynamic>) {
       throw const ApiException(0, 'Dữ liệu phân tích không đúng định dạng.');
     }
 
-    return Map<String, dynamic>.from(decoded['analysis'] as Map);
+    if (decoded['analysis'] is Map) {
+      return Map<String, dynamic>.from(decoded['analysis'] as Map);
+    }
+    if (decoded.containsKey('face_detected')) {
+      return decoded;
+    }
+
+    throw const ApiException(0, 'Dữ liệu phân tích không đúng định dạng.');
   }
 
   Future<Uint8List> generatePreview({
@@ -78,7 +108,13 @@ class TryOnImageService {
     required String category,
     required String prompt,
   }) async {
-    final bytes = await image.readAsBytes();
+    final Uint8List bytes;
+    try {
+      bytes = await compute(_prepareImageBytes, image.path);
+    } on FormatException catch (err) {
+      throw ApiException(0, err.message);
+    }
+
     if (bytes.isEmpty) {
       throw const ApiException(0, 'Ảnh mặt khách rỗng hoặc không đọc được.');
     }

@@ -151,7 +151,12 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
 
       final faceShape = (analysis['face_shape'] ?? 'Cân đối').toString().trim();
       final skinTone = (analysis['skin_tone'] ?? 'Tự nhiên').toString().trim();
-      final script = (analysis['consultation_script'] ?? '').toString().trim();
+      final script = (analysis['consultation_note'] ??
+              analysis['consultation_script'] ??
+              analysis['observations'] ??
+              '')
+          .toString()
+          .trim();
 
       setState(() {
         _faceSummary = 'Mặt: $faceShape • Da: $skinTone';
