@@ -34,7 +34,8 @@ android {
             "fbLoginScheme" to "fb1555273769742937",
             "facebookClientToken" to (
                 (project.findProperty("FB_CLIENT_TOKEN") as String?)
-                    ?: System.getenv("FB_CLIENT_TOKEN")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: System.getenv("FB_CLIENT_TOKEN")?.takeIf { it.isNotBlank() }
                     ?: "CHANGE_ME"
             ),
         )

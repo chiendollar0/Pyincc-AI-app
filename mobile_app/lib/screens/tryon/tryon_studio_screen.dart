@@ -15,6 +15,7 @@ class TryOnStudioScreen extends StatefulWidget {
   final String authToken;
   final String? customerPsid;
   final String? customerName;
+  final String? pageId;
   final VoidCallback? onSignOut;
 
   const TryOnStudioScreen({
@@ -23,6 +24,7 @@ class TryOnStudioScreen extends StatefulWidget {
     this.authToken = '',
     this.customerPsid,
     this.customerName,
+    this.pageId,
     this.onSignOut,
   });
 
@@ -312,6 +314,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
         imageBytes: bytes,
         recipientId: targetPsid,
         caption: captionCtrl.text,
+        pageId: widget.pageId,
       );
       if (!mounted) return;
       showAppMessage(

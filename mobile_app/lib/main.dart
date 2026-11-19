@@ -99,6 +99,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _emailCtrl = TextEditingController();
   final TextEditingController _passwordCtrl = TextEditingController();
   bool _isLoading = false;
+  bool _obscurePassword = true;
   String? _errorText;
 
   @override
@@ -184,6 +185,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       TextField(
                         controller: _emailCtrl,
                         keyboardType: TextInputType.emailAddress,
+                        textInputAction: TextInputAction.next,
+                        autofillHints: const [AutofillHints.email],
                         decoration: const InputDecoration(
                           labelText: 'Email đăng nhập',
                           prefixIcon: Icon(Icons.email_outlined),
@@ -192,11 +195,28 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(height: 12),
                       TextField(
                         controller: _passwordCtrl,
-                        obscureText: true,
+                        obscureText: _obscurePassword,
+                        textInputAction: TextInputAction.done,
+                        autofillHints: const [AutofillHints.password],
                         onSubmitted: (_) => _isLoading ? null : _submitLogin(),
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Mật khẩu',
-                          prefixIcon: Icon(Icons.lock_outline),
+                          prefixIcon: const Icon(Icons.lock_outline),
+                          suffixIcon: IconButton(
+                            tooltip: _obscurePassword
+                                ? 'Hiện mật khẩu'
+                                : 'Ẩn mật khẩu',
+                            icon: Icon(
+                              _obscurePassword
+                                  ? Icons.visibility_outlined
+                                  : Icons.visibility_off_outlined,
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _obscurePassword = !_obscurePassword;
+                              });
+                            },
+                          ),
                         ),
                       ),
                       if (_errorText != null) ...[
@@ -253,12 +273,33 @@ class MainDashboardScreen extends StatefulWidget {
 }
 
 class _MainDashboardScreenState extends State<MainDashboardScreen> {
+  static const String _tryOnApiUrl = String.fromEnvironment(
+    'TRYON_API_URL',
+    defaultValue: '',
+  );
+  static const String _webhookApiUrl = String.fromEnvironment(
+    'WEBHOOK_API_URL',
+    defaultValue: '',
+  );
+  static const String _apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: '',
+  );
+
+  static String _firstNonEmpty(List<String> candidates, String fallback) {
+    for (final raw in candidates) {
+      final trimmed = raw.trim();
+      if (trimmed.isNotEmpty) return trimmed;
+    }
+    return fallback;
+  }
+
   int _selectedIndex = 0;
 
   late final InboxService _inboxService = InboxService(
-    webhookBaseUrl: const String.fromEnvironment(
-      'WEBHOOK_API_URL',
-      defaultValue: InboxService.defaultBackendUrl,
+    webhookBaseUrl: _firstNonEmpty(
+      const [_tryOnApiUrl, _webhookApiUrl, _apiBaseUrl],
+      InboxService.defaultBackendUrl,
     ),
     supabaseUrl: const String.fromEnvironment(
       'SUPABASE_URL',
@@ -271,18 +312,24 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
     authToken: widget.authToken,
   );
 
-  final String _studioApiBaseUrl = const String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: InboxService.defaultBackendUrl,
+  late final String _studioApiBaseUrl = _firstNonEmpty(
+    const [_tryOnApiUrl, _apiBaseUrl, _webhookApiUrl],
+    InboxService.defaultBackendUrl,
   );
 
   String? _activeTryOnPsid;
   String? _activeTryOnCustomerName;
+  String? _activeTryOnPageId;
 
-  void _openTryOnTab({String? psid, String? customerName}) {
+  void _openTryOnTab({
+    String? psid,
+    String? customerName,
+    String? pageId,
+  }) {
     setState(() {
       _activeTryOnPsid = psid;
       _activeTryOnCustomerName = customerName;
+      _activeTryOnPageId = (pageId ?? '').trim().isNotEmpty ? pageId!.trim() : null;
       _selectedIndex = 1;
     });
   }
@@ -303,6 +350,7 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
             authToken: widget.authToken,
             customerPsid: _activeTryOnPsid,
             customerName: _activeTryOnCustomerName,
+            pageId: _activeTryOnPageId,
             onSignOut: widget.onSignOut,
           ),
           SalonOperationsHubScreen(
@@ -339,7 +387,11 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
 
 class AiTriageInboxScreen extends StatefulWidget {
   final InboxService inboxService;
-  final void Function({String? psid, String? customerName}) onOpenTryOn;
+  final void Function({
+    String? psid,
+    String? customerName,
+    String? pageId,
+  }) onOpenTryOn;
   final VoidCallback? onSignOut;
 
   const AiTriageInboxScreen({
@@ -629,6 +681,7 @@ class _AiTriageInboxScreenState extends State<AiTriageInboxScreen> {
                               onPressed: () => widget.onOpenTryOn(
                                 psid: (chat['psid'] ?? '').toString(),
                                 customerName: (chat['name'] ?? '').toString(),
+                                pageId: (chat['pageId'] ?? '').toString(),
                               ),
                               icon: const Icon(
                                 Icons.face_retouching_natural,

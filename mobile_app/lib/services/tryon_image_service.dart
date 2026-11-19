@@ -1,17 +1,18 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'api_client.dart';
 import 'image_preprocessor.dart';
 
-Future<Uint8List> _prepareImageBytes(String filePath) {
-  return ImagePreprocessor.prepare(File(filePath));
-}
-
 class TryOnImageService {
+  static const String _supabaseUrl = String.fromEnvironment(
+    'SUPABASE_URL',
+    defaultValue: 'https://ihufvqrxdswgbagzhydb.supabase.co',
+  );
+
   final String apiBaseUrl;
   final String authToken;
 
@@ -41,14 +42,13 @@ class TryOnImageService {
     required File image,
     required List<Map<String, dynamic>> catalog,
   }) async {
-    final url = Uri.parse(
-      'https://ihufvqrxdswgbagzhydb.supabase.co/functions/v1/tryon-analyze',
-    );
+    final baseSupabaseUrl = _supabaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final url = Uri.parse('$baseSupabaseUrl/functions/v1/tryon-analyze');
 
     final Uint8List bytes;
     try {
-      bytes = await compute(_prepareImageBytes, image.path);
-    } on FormatException catch (err) {
+      bytes = await ImagePreprocessor.prepare(image);
+    } on ImagePrepareException catch (err) {
       throw ApiException(0, err.message);
     }
 
@@ -110,8 +110,8 @@ class TryOnImageService {
   }) async {
     final Uint8List bytes;
     try {
-      bytes = await compute(_prepareImageBytes, image.path);
-    } on FormatException catch (err) {
+      bytes = await ImagePreprocessor.prepare(image);
+    } on ImagePrepareException catch (err) {
       throw ApiException(0, err.message);
     }
 
@@ -145,6 +145,7 @@ class TryOnImageService {
     required Uint8List imageBytes,
     required String recipientId,
     required String caption,
+    String? pageId,
   }) async {
     if (imageBytes.isEmpty) {
       throw const ApiException(0, 'Chưa có ảnh mô phỏng AI để gửi.');
@@ -156,15 +157,20 @@ class TryOnImageService {
         'Vui lòng chọn hội thoại khách hàng hoặc nhập mã khách hàng trước khi gửi.',
       );
     }
+    final cleanPageId = (pageId ?? '').trim();
 
     // Bước 1: Tạo bản nháp ở trạng thái pending
+    final draftPayload = <String, dynamic>{
+      'recipientId': cleanRecipient,
+      'imageBase64': base64Encode(imageBytes),
+      'caption': caption.trim(),
+    };
+    if (cleanPageId.isNotEmpty) {
+      draftPayload['pageId'] = cleanPageId;
+    }
     final draftRes = await _api.post(
       '/tryon-drafts',
-      {
-        'recipientId': cleanRecipient,
-        'imageBase64': base64Encode(imageBytes),
-        'caption': caption.trim(),
-      },
+      draftPayload,
       timeout: const Duration(seconds: 30),
     );
 
@@ -183,9 +189,15 @@ class TryOnImageService {
     );
 
     // Bước 3: Máy chủ kiểm tra approved + recipientId + Fanpage rồi mới gửi
+    final sendPayload = <String, dynamic>{
+      'mediaRecordId': mediaRecordId,
+    };
+    if (cleanPageId.isNotEmpty) {
+      sendPayload['pageId'] = cleanPageId;
+    }
     return _api.post(
       '/send-tryon-image',
-      {'mediaRecordId': mediaRecordId},
+      sendPayload,
       timeout: const Duration(seconds: 30),
     );
   }

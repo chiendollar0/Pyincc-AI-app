@@ -75,7 +75,9 @@ create table if not exists public.customer_media (
   mime_type text,
   file_size integer,
   recipient_psid text,
+  page_id text,
   caption text,
+  created_by uuid,
   approval_status text not null default 'pending' check (approval_status in ('pending','approved','sending','sent')),
   approved_by uuid,
   approved_at timestamptz,
@@ -129,6 +131,14 @@ create table if not exists public.memberships (
 create unique index if not exists memberships_org_user_uidx
   on public.memberships (org_id, user_id)
   where user_id is not null;
+
+create unique index if not exists memberships_pending_email_uidx
+  on public.memberships (org_id, invited_email)
+  where status = 'pending' and invited_email is not null;
+
+create unique index if not exists memberships_pending_fb_uidx
+  on public.memberships (org_id, invited_fb_user_id)
+  where status = 'pending' and invited_fb_user_id is not null;
 
 create table if not exists public.bookings (
   id uuid primary key default gen_random_uuid(),
