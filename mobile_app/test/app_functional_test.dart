@@ -17,7 +17,7 @@ void main() {
 
       // Submit empty credentials -> friendly Vietnamese message without raw technical text
       await tester.tap(find.text('Đăng nhập'));
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 200));
       expect(
         find.text('Vui lòng nhập đầy đủ Email và Mật khẩu.'),
         findsOneWidget,
@@ -36,6 +36,7 @@ void main() {
         const BeautyCrmApp(initialAuthToken: 'session-token-for-widget-test'),
       );
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
       // Tab 1: Hộp thư AI (no hardcoded customer names)
       expect(find.text('Hộp thư AI'), findsWidgets);
@@ -47,7 +48,7 @@ void main() {
 
       // Switch to Tab 2: Studio AI
       await tester.tap(find.text('Studio AI').last);
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Chưa có ảnh mặt mộc của khách'), findsOneWidget);
 
       await tester.tap(find.widgetWithText(ChoiceChip, 'Môi'));
@@ -58,9 +59,9 @@ void main() {
       await tester.pump();
       expect(find.textContaining('Mày sợi Hairstroke Nâu Tây'), findsOneWidget);
 
-      // Verify Logout returns to LoginScreen
-      await tester.tap(find.byIcon(Icons.logout).first);
-      await tester.pumpAndSettle();
+      // Verify Logout button on the active tab returns to LoginScreen
+      await tester.tap(find.byIcon(Icons.logout).hitTestable().first);
+      await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Email đăng nhập'), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox.shrink());
@@ -74,13 +75,14 @@ void main() {
         const BeautyCrmApp(initialAuthToken: 'session-token-for-widget-test'),
       );
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
       await tester.tap(find.text('Quản lý tiệm').last);
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 300));
 
       // Switch to sub-tab 'Kết nối & Chủ tiệm'
       await tester.tap(find.text('Kết nối & Chủ tiệm'));
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('Kết nối với Facebook'), findsOneWidget);
       expect(find.text('Lưu kịch bản & bảng giá'), findsOneWidget);
