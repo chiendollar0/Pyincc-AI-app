@@ -266,6 +266,40 @@ app.post('/auth/facebook/deauthorize', express.urlencoded({ extended: false }), 
   return res.json({ success: true });
 }));
 
+app.post('/auth/facebook/data-deletion', express.urlencoded({ extended: false }), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+  if (!config.metaAppSecret || !supabase) return res.status(503).json({ error: 'Service Unavailable' });
+  const parsed = verifyFacebookSignedRequest(req.body?.signed_request);
+  if (!parsed?.user_id) return res.status(403).json({ error: 'Forbidden' });
+  const fbUserId = String(parsed.user_id);
+  await supabase.from('connected_pages').delete().eq('connected_by_fb_user_id', fbUserId);
+  const confirmationCode = crypto.createHash('sha256')
+    .update(`${fbUserId}:${Date.now()}`)
+    .digest('hex')
+    .slice(0, 16);
+  const statusUrl = `${config.publicBaseUrl.replace(/\/+$/, '')}/data-deletion?code=${confirmationCode}`;
+  return res.json({ url: statusUrl, confirmation_code: confirmationCode });
+}));
+
+app.get('/auth/facebook/callback', (req, res) => {
+  const oauthError = typeof req.query.error === 'string' ? req.query.error.trim() : '';
+  const code = typeof req.query.code === 'string' ? req.query.code.trim() : '';
+  if (oauthError) {
+    return res.status(400).type('html').send(
+      '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Kết nối Facebook — PyinccCRM</title></head>' +
+      '<body style="font-family:sans-serif;max-width:560px;margin:40px auto;padding:0 16px;">' +
+      '<h2>Kết nối Facebook đã bị huỷ</h2><p>Bạn có thể đóng cửa sổ này và quay lại ứng dụng PyinccAICRM.</p></body></html>'
+    );
+  }
+  if (!code) {
+    return res.status(400).json({ error: 'MISSING_OAUTH_CODE' });
+  }
+  return res.status(200).type('html').send(
+    '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Kết nối Facebook — PyinccCRM</title></head>' +
+    '<body style="font-family:sans-serif;max-width:560px;margin:40px auto;padding:0 16px;">' +
+    '<h2>Đã nhận xác thực Facebook</h2><p>Vui lòng quay lại ứng dụng PyinccAICRM để hoàn tất kết nối Fanpage.</p></body></html>'
+  );
+});
+
 app.get('/connected-pages', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from('connected_pages').select('page_id, page_name, updated_at')
     .eq('org_id', req.orgId).order('updated_at', { ascending: false });
