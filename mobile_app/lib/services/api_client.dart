@@ -3,15 +3,9 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
-class ApiException implements Exception {
-  final int status;
-  final String message;
+import '../core/errors/api_exception.dart';
 
-  const ApiException(this.status, this.message);
-
-  @override
-  String toString() => message;
-}
+export '../core/errors/api_exception.dart';
 
 class ApiClient {
   final String baseUrl;

@@ -4,8 +4,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
-import '../../services/api_client.dart';
 import '../theme/app_theme.dart';
+import 'api_exception.dart';
 
 class AuthFailure implements Exception {
   final String message;
@@ -17,9 +17,8 @@ class AuthFailure implements Exception {
 }
 
 String userMessage(Object error) {
-  if (error is AuthFailure) {
-    return error.message;
-  }
+  if (error is AuthFailure) return error.message;
+  if (error is FormatException) return error.message;
   if (error is ApiException) {
     if (error.status == 0) return error.message;
     switch (error.status) {
@@ -31,8 +30,12 @@ String userMessage(Object error) {
         return 'Không tìm thấy dữ liệu. Có thể đã bị xoá.';
       case 409:
         return 'Thao tác này đang được xử lý hoặc đã hoàn tất.';
+      case 413:
+        return 'Ảnh quá lớn. Vui lòng chọn ảnh nhỏ hơn.';
+      case 415:
+        return 'Định dạng ảnh chưa được hỗ trợ. Vui lòng dùng JPG, PNG hoặc WebP.';
       case 422:
-        return 'Không thể gửi tin: thiếu thông tin khách hàng, chưa kết nối Fanpage, hoặc đã quá khung 24 giờ.';
+        return 'Chưa có Fanpage hoặc mã khách để gửi. Vui lòng kiểm tra lại.';
       case 429:
         return 'Đã đạt giới hạn trong 24 giờ. Vui lòng thử lại sau.';
       case 501:
@@ -43,7 +46,9 @@ String userMessage(Object error) {
     }
     return 'Có lỗi xảy ra. Vui lòng thử lại.';
   }
-  if (error is SocketException || error is TimeoutException) {
+  if (error is SocketException ||
+      error is TimeoutException ||
+      error is HttpException) {
     return 'Không kết nối được máy chủ. Kiểm tra mạng và thử lại.';
   }
   return 'Có lỗi xảy ra. Vui lòng thử lại.';
@@ -58,7 +63,7 @@ void showAppMessage(
   messenger.showSnackBar(
     SnackBar(
       content: Text(text),
-      backgroundColor: isError ? AppColors.primaryDark : AppColors.success,
+      backgroundColor: isError ? AppColors.danger : AppColors.success,
     ),
   );
 }
