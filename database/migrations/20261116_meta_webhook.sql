@@ -1,5 +1,5 @@
 -- Run after database/schema.sql on an existing Supabase project.
--- These columns/indexes support the Meta webhook implementation and idempotent delivery.
+-- Safe to run repeatedly (idempotent).
 
 alter table public.webhook_events
   add column if not exists event_id text;
@@ -85,6 +85,12 @@ begin
 end;
 $$ language plpgsql;
 
+drop trigger if exists conversation_updated_at_trigger on public.conversation_messages;
+create trigger conversation_updated_at_trigger
+  after insert or update on public.conversation_messages
+  for each row
+  execute function public.touch_conversation_updated_at();
+
 -- Enable Supabase Realtime for inbox updates. Safe to run repeatedly.
 do $$
 begin
@@ -97,4 +103,5 @@ begin
   ) then
     alter publication supabase_realtime add table public.conversation_messages;
   end if;
-end $$;
+end;
+$$;
