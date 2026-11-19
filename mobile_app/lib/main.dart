@@ -147,11 +147,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     children: [
                       Center(
                         child: ClipRRect(
-                          borderRadius: BorderRadius.circular(18),
+                          borderRadius: BorderRadius.circular(20),
                           child: Image.asset(
-                            'assets/brand/logo.png',
-                            width: 72,
-                            height: 72,
+                            'assets/brand/hero.png',
+                            width: 112,
+                            height: 112,
                             fit: BoxFit.cover,
                             errorBuilder: (_, __, ___) => const Icon(
                               Icons.spa_outlined,
