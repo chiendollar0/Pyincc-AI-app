@@ -93,7 +93,16 @@ class ApiClient {
 
   Map<String, dynamic> _decodeObjectResponse(http.Response response) {
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw ApiException(response.statusCode, 'Yêu cầu chưa thành công.');
+      String serverCode = 'Yêu cầu chưa thành công.';
+      try {
+        final parsed = jsonDecode(response.body);
+        if (parsed is Map<String, dynamic> && parsed['error'] is String) {
+          serverCode = (parsed['error'] as String).trim();
+        }
+      } catch (_) {
+        // Giữ thông báo mặc định nếu phản hồi không phải JSON
+      }
+      throw ApiException(response.statusCode, serverCode);
     }
     final decoded = jsonDecode(response.body);
     if (decoded is! Map<String, dynamic>) {

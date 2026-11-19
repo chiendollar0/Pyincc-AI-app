@@ -35,6 +35,9 @@ String userMessage(Object error) {
       case 415:
         return 'Định dạng ảnh chưa được hỗ trợ. Vui lòng dùng JPG, PNG hoặc WebP.';
       case 422:
+        if (error.message.contains('OUTSIDE_24H_WINDOW')) {
+          return 'Đã quá khung 24 giờ kể từ tin nhắn cuối của khách. Cần chờ khách nhắn lại.';
+        }
         return 'Chưa có Fanpage hoặc mã khách để gửi. Vui lòng kiểm tra lại.';
       case 429:
         return 'Đã đạt giới hạn trong 24 giờ. Vui lòng thử lại sau.';

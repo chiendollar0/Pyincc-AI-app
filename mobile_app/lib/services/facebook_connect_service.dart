@@ -12,7 +12,15 @@ class FacebookConnectService {
 
   /// Gửi user token ngắn hạn 1 lần cho máy chủ đổi sang page token mã hóa và xóa ngay khỏi app.
   Future<List<Map<String, dynamic>>> connect() async {
-    final result = await FacebookAuth.instance.login(permissions: _permissions);
+    LoginResult result;
+    try {
+      result = await FacebookAuth.instance.login(permissions: _permissions);
+    } catch (_) {
+      throw const ApiException(
+        0,
+        'Không mở được đăng nhập Facebook. Kiểm tra ứng dụng Facebook và kết nối mạng.',
+      );
+    }
 
     if (result.status == LoginStatus.cancelled) {
       throw const ApiException(0, 'Bạn đã huỷ đăng nhập Facebook.');
@@ -20,7 +28,7 @@ class FacebookConnectService {
     if (result.status != LoginStatus.success) {
       throw const ApiException(
         0,
-        'Đăng nhập Facebook chưa thành công. Vui lòng thử lại hoặc kiểm tra quyền tài khoản.',
+        'Đăng nhập Facebook chưa thành công. Vui lòng thử lại.',
       );
     }
 
@@ -35,16 +43,36 @@ class FacebookConnectService {
         {'accessToken': userToken},
       );
       final rawPages = body['pages'];
-      if (rawPages is List) {
-        return rawPages.whereType<Map<String, dynamic>>().toList();
+      final pages = rawPages is List
+          ? rawPages.whereType<Map<String, dynamic>>().toList()
+          : <Map<String, dynamic>>[];
+      if (pages.isEmpty) {
+        throw const ApiException(
+          0,
+          'Tài khoản Facebook này chưa quản lý Fanpage nào.',
+        );
       }
-      return const [];
+      return pages;
+    } on ApiException catch (e) {
+      if (e.message.contains('PAGE_ALREADY_BOUND')) {
+        throw const ApiException(
+          0,
+          'Fanpage này đã được kết nối với một tiệm khác.',
+        );
+      }
+      if (e.message.contains('INVALID_FACEBOOK_TOKEN')) {
+        throw const ApiException(
+          0,
+          'Phiên xác thực Facebook không hợp lệ hoặc đã hết hạn. Vui lòng bấm kết nối lại.',
+        );
+      }
+      rethrow;
     } finally {
       // Xóa token khỏi bộ nhớ ứng dụng ngay sau khi gửi cho máy chủ.
       try {
         await FacebookAuth.instance.logOut();
       } catch (_) {
-        // Bỏ qua lỗi dọn phiên cục bộ nếu có
+        // Bỏ qua lỗi dọn phiên cục bộ nếu có.
       }
     }
   }
