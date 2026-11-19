@@ -1,0 +1,82 @@
+name: Release Pyincc AI CRM APK
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  release-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js & verify backend syntax
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check backend syntax
+        run: node --check backend_bridge/meta-webhook/index.js
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.50.0"
+          channel: 'stable'
+          cache: true
+
+      - name: Decode Android Release Keystore (if configured)
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_B64" ]; then
+            echo "$ANDROID_KEYSTORE_B64" | base64 --decode > mobile_app/android/app/pyincc-release.jks
+            cat <<EOF > mobile_app/android/key.properties
+          storePassword=$ANDROID_STORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=pyincc-release.jks
+          EOF
+          else
+            echo "ANDROID_KEYSTORE_B64 not set; building release APK with fallback signing config."
+          fi
+
+      - name: Install dependencies
+        working-directory: ./mobile_app
+        run: flutter pub get
+
+      - name: Analyze Dart code
+        working-directory: ./mobile_app
+        run: flutter analyze --no-fatal-infos
+
+      - name: Run widget tests
+        working-directory: ./mobile_app
+        run: flutter test
+
+      - name: Build Release APK (Only Public Dart-Defines)
+        working-directory: ./mobile_app
+        run: |
+          flutter build apk --release \
+            --dart-define=APP_ENV=production \
+            --dart-define=SUPABASE_URL=${{ vars.PROD_SUPABASE_URL || vars.SUPABASE_URL || 'https://ihufvqrxdswgbagzhydb.supabase.co' }} \
+            --dart-define=SUPABASE_ANON_KEY=${{ vars.PROD_SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY }} \
+            --dart-define=TRYON_API_URL=${{ vars.PROD_API_URL || vars.TRYON_API_URL || 'https://pyincccrm.bothelper.vn' }}
+
+      - name: Upload Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyincc-aicrm-release-apk
+          path: mobile_app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30

@@ -5,10 +5,20 @@ import 'package:pyincc_app/main.dart';
 
 void main() {
   testWidgets(
-    '1. Trung tam CSKH AI renders KPIs, filters chats, and opens approval dialog',
+    '1. Login screen renders by default, enters Demo mode, and Trung tam CSKH AI renders KPIs & approval dialog',
     (WidgetTester tester) async {
       await tester.pumpWidget(const BeautyCrmApp());
       await tester.pump();
+
+      // Verify LoginScreen is shown first
+      expect(find.text('Đăng nhập • Pyincc AI CRM'), findsOneWidget);
+      expect(find.text('Email đăng nhập'), findsOneWidget);
+      expect(find.text('Mật khẩu'), findsOneWidget);
+      expect(find.text('Xem giao diện Demo (Offline)'), findsOneWidget);
+
+      // Enter offline Demo mode
+      await tester.tap(find.text('Xem giao diện Demo (Offline)'));
+      await tester.pumpAndSettle();
 
       // Verify AppBar & KPI badges
       expect(find.text('Trung tâm CSKH AI'), findsOneWidget);
@@ -44,6 +54,11 @@ void main() {
       await tester.tap(find.text('Hủy'));
       await tester.pumpAndSettle();
 
+      // Verify logout button returns to LoginScreen
+      await tester.tap(find.byIcon(Icons.logout).first);
+      await tester.pumpAndSettle();
+      expect(find.text('Đăng nhập • Pyincc AI CRM'), findsOneWidget);
+
       // Unmount to dispose periodic polling timer cleanly
       await tester.pumpWidget(const SizedBox.shrink());
     },
@@ -52,7 +67,7 @@ void main() {
   testWidgets(
     '2. Studio AI tab filters catalog items and enforces human approval state',
     (WidgetTester tester) async {
-      await tester.pumpWidget(const BeautyCrmApp());
+      await tester.pumpWidget(const BeautyCrmApp(startInDemoMode: true));
       await tester.pump();
 
       // Navigate to Tab 2 (Studio AI) via quick button on chat card
@@ -85,7 +100,7 @@ void main() {
   testWidgets(
     '3. Quan ly Tiem tab manages schedule/duty and enforces Zero-Key UI for owner',
     (WidgetTester tester) async {
-      await tester.pumpWidget(const BeautyCrmApp());
+      await tester.pumpWidget(const BeautyCrmApp(startInDemoMode: true));
       await tester.pump();
 
       // Navigate to Tab 3 (Quản lý Tiệm)

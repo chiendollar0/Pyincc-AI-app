@@ -4,19 +4,74 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'screens/tryon/tryon_studio_screen.dart';
+import 'services/auth_service.dart';
 import 'services/inbox_service.dart';
 
 void main() {
   runApp(const BeautyCrmApp());
 }
 
-class BeautyCrmApp extends StatelessWidget {
-  const BeautyCrmApp({super.key});
+class BeautyCrmApp extends StatefulWidget {
+  final bool startInDemoMode;
+
+  const BeautyCrmApp({
+    super.key,
+    this.startInDemoMode = false,
+  });
+
+  @override
+  State<BeautyCrmApp> createState() => _BeautyCrmAppState();
+}
+
+class _BeautyCrmAppState extends State<BeautyCrmApp> {
+  static const String _supabaseUrl = String.fromEnvironment(
+    'SUPABASE_URL',
+    defaultValue: 'https://ihufvqrxdswgbagzhydb.supabase.co',
+  );
+  static const String _supabaseAnonKey = String.fromEnvironment(
+    'SUPABASE_ANON_KEY',
+    defaultValue: '',
+  );
+
+  final AuthService _authService = const AuthService(
+    supabaseUrl: _supabaseUrl,
+    supabaseAnonKey: _supabaseAnonKey,
+  );
+
+  String _accessToken = const String.fromEnvironment(
+    'BACKEND_AUTH_TOKEN',
+    defaultValue: '',
+  );
+  late bool _isAuthenticatedOrDemo =
+      widget.startInDemoMode || _accessToken.trim().isNotEmpty;
+
+  void _onSignedIn(AuthSession session) {
+    setState(() {
+      _accessToken = session.accessToken;
+      _isAuthenticatedOrDemo = true;
+    });
+  }
+
+  void _onEnterDemoMode() {
+    setState(() {
+      _accessToken = '';
+      _isAuthenticatedOrDemo = true;
+    });
+  }
+
+  Future<void> _onSignOut() async {
+    final tokenToRevoke = _accessToken;
+    setState(() {
+      _accessToken = '';
+      _isAuthenticatedOrDemo = false;
+    });
+    await _authService.signOut(tokenToRevoke);
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'PYINCC AI Beauty Manager',
+      title: 'Pyincc AI CRM',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFD81B60)),
@@ -28,13 +83,181 @@ class BeautyCrmApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const MainDashboardScreen(),
+      home: _isAuthenticatedOrDemo
+          ? MainDashboardScreen(
+              authToken: _accessToken,
+              onSignOut: _onSignOut,
+            )
+          : LoginScreen(
+              authService: _authService,
+              onSignedIn: _onSignedIn,
+              onEnterDemoMode: _onEnterDemoMode,
+            ),
+    );
+  }
+}
+
+class LoginScreen extends StatefulWidget {
+  final AuthService authService;
+  final void Function(AuthSession session) onSignedIn;
+  final VoidCallback onEnterDemoMode;
+
+  const LoginScreen({
+    super.key,
+    required this.authService,
+    required this.onSignedIn,
+    required this.onEnterDemoMode,
+  });
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final TextEditingController _emailCtrl = TextEditingController();
+  final TextEditingController _passwordCtrl = TextEditingController();
+  bool _isLoading = false;
+  String? _errorText;
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _passwordCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submitLogin() async {
+    setState(() {
+      _isLoading = true;
+      _errorText = null;
+    });
+    try {
+      final session = await widget.authService.signInWithPassword(
+        email: _emailCtrl.text,
+        password: _passwordCtrl.text,
+      );
+      if (!mounted) return;
+      widget.onSignedIn(session);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _errorText = '$e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Đăng nhập • Pyincc AI CRM')),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Icon(
+                        Icons.spa_outlined,
+                        size: 48,
+                        color: Color(0xFFD81B60),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Pyincc AI CRM',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Đăng nhập tài khoản Chủ tiệm hoặc Nhân viên đã được cấp quyền',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 12, color: Colors.black54),
+                      ),
+                      const SizedBox(height: 20),
+                      TextField(
+                        controller: _emailCtrl,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: const InputDecoration(
+                          labelText: 'Email đăng nhập',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.email_outlined),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _passwordCtrl,
+                        obscureText: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Mật khẩu',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.lock_outline),
+                        ),
+                      ),
+                      if (_errorText != null) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          _errorText!,
+                          style: const TextStyle(
+                            color: Colors.red,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: _isLoading ? null : _submitLogin,
+                        icon: _isLoading
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.login),
+                        label: Text(
+                          _isLoading ? 'Đang xác thực...' : 'Đăng nhập',
+                        ),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 48),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextButton(
+                        onPressed: _isLoading ? null : widget.onEnterDemoMode,
+                        child: const Text('Xem giao diện Demo (Offline)'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
 
 class MainDashboardScreen extends StatefulWidget {
-  const MainDashboardScreen({super.key});
+  final String authToken;
+  final VoidCallback? onSignOut;
+
+  const MainDashboardScreen({
+    super.key,
+    this.authToken = '',
+    this.onSignOut,
+  });
 
   @override
   State<MainDashboardScreen> createState() => _MainDashboardScreenState();
@@ -56,6 +279,7 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
       'SUPABASE_ANON_KEY',
       defaultValue: '',
     ),
+    authToken: widget.authToken,
   );
 
   final String _tryOnApiUrl = const String.fromEnvironment(
@@ -83,13 +307,18 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
           AiTriageInboxScreen(
             inboxService: _inboxService,
             onOpenTryOn: _openTryOnTab,
+            onSignOut: widget.onSignOut,
           ),
           TryOnStudioScreen(
             apiBaseUrl: _tryOnApiUrl,
+            authToken: widget.authToken,
             customerPsid: _activeTryOnPsid,
             customerName: _activeTryOnCustomerName,
           ),
-          SalonOperationsHubScreen(inboxService: _inboxService),
+          SalonOperationsHubScreen(
+            inboxService: _inboxService,
+            onSignOut: widget.onSignOut,
+          ),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -121,11 +350,13 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
 class AiTriageInboxScreen extends StatefulWidget {
   final InboxService inboxService;
   final void Function({String? psid, String? customerName}) onOpenTryOn;
+  final VoidCallback? onSignOut;
 
   const AiTriageInboxScreen({
     super.key,
     required this.inboxService,
     required this.onOpenTryOn,
+    this.onSignOut,
   });
 
   @override
@@ -315,6 +546,12 @@ class _AiTriageInboxScreenState extends State<AiTriageInboxScreen> {
             icon: const Icon(Icons.refresh),
             tooltip: 'Đồng bộ tin nhắn',
           ),
+          if (widget.onSignOut != null)
+            IconButton(
+              onPressed: widget.onSignOut,
+              icon: const Icon(Icons.logout),
+              tooltip: 'Đăng xuất',
+            ),
         ],
       ),
       body: SafeArea(
@@ -639,10 +876,12 @@ class _KpiStatBadge extends StatelessWidget {
 /// Tab 3 gộp gọn: Ca trực & Lịch hẹn + Cấu hình Chủ tiệm & Kết nối Facebook
 class SalonOperationsHubScreen extends StatefulWidget {
   final InboxService inboxService;
+  final VoidCallback? onSignOut;
 
   const SalonOperationsHubScreen({
     super.key,
     required this.inboxService,
+    this.onSignOut,
   });
 
   @override
@@ -880,6 +1119,12 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
               onPressed: _addQuickBookingDialog,
               icon: const Icon(Icons.add_alarm),
               tooltip: 'Thêm lịch hẹn',
+            ),
+          if (widget.onSignOut != null)
+            IconButton(
+              onPressed: widget.onSignOut,
+              icon: const Icon(Icons.logout),
+              tooltip: 'Đăng xuất',
             ),
         ],
       ),

@@ -10,12 +10,14 @@ import '../../services/tryon_image_service.dart';
 
 class TryOnStudioScreen extends StatefulWidget {
   final String apiBaseUrl;
+  final String authToken;
   final String? customerPsid;
   final String? customerName;
 
   const TryOnStudioScreen({
     super.key,
     required this.apiBaseUrl,
+    this.authToken = '',
     this.customerPsid,
     this.customerName,
   });
@@ -103,7 +105,10 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     });
 
     try {
-      final service = TryOnImageService(apiBaseUrl: widget.apiBaseUrl);
+      final service = TryOnImageService(
+        apiBaseUrl: widget.apiBaseUrl,
+        authToken: widget.authToken,
+      );
       final analysis = await service.analyzeFace(
         image: _originalImage!,
         catalog: _catalog,
@@ -141,7 +146,10 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
 
     setState(() => _isBusy = true);
     try {
-      final service = TryOnImageService(apiBaseUrl: widget.apiBaseUrl);
+      final service = TryOnImageService(
+        apiBaseUrl: widget.apiBaseUrl,
+        authToken: widget.authToken,
+      );
       final bytes = await service.generatePreview(
         image: image,
         category: item['category'] as String,
@@ -221,7 +229,10 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
 
     setState(() => _isBusy = true);
     try {
-      final service = TryOnImageService(apiBaseUrl: widget.apiBaseUrl);
+      final service = TryOnImageService(
+        apiBaseUrl: widget.apiBaseUrl,
+        authToken: widget.authToken,
+      );
       final result = await service.sendApprovedPreview(
         imageBytes: bytes,
         recipientId: psidCtrl.text,
@@ -334,21 +345,51 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
                         )
                       : ClipRRect(
                           borderRadius: BorderRadius.circular(15),
-                          child: _aiResultBytes == null
-                              ? Image.file(_originalImage!, fit: BoxFit.cover)
-                              : BeforeAfter(
-                                  value: _sliderPosition,
-                                  before: Image.file(
-                                    _originalImage!,
-                                    fit: BoxFit.cover,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              _aiResultBytes == null
+                                  ? Image.file(
+                                      _originalImage!,
+                                      fit: BoxFit.cover,
+                                    )
+                                  : BeforeAfter(
+                                      value: _sliderPosition,
+                                      before: Image.file(
+                                        _originalImage!,
+                                        fit: BoxFit.cover,
+                                      ),
+                                      after: Image.memory(
+                                        _aiResultBytes!,
+                                        fit: BoxFit.cover,
+                                      ),
+                                      onValueChanged: (v) =>
+                                          setState(() => _sliderPosition = v),
+                                    ),
+                              Positioned(
+                                top: 10,
+                                left: 10,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 4,
                                   ),
-                                  after: Image.memory(
-                                    _aiResultBytes!,
-                                    fit: BoxFit.cover,
+                                  decoration: BoxDecoration(
+                                    color: Colors.black54,
+                                    borderRadius: BorderRadius.circular(8),
                                   ),
-                                  onValueChanged: (v) =>
-                                      setState(() => _sliderPosition = v),
+                                  child: const Text(
+                                    'Ảnh mô phỏng bằng AI',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
                                 ),
+                              ),
+                            ],
+                          ),
                         ),
                 ),
               ),

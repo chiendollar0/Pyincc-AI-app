@@ -4,17 +4,24 @@ const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
+app.disable('x-powered-by');
 const port = Number(process.env.PORT) || 3000;
 const config = {
+  nodeEnv: process.env.NODE_ENV || 'development',
   supabaseUrl: process.env.SUPABASE_URL || 'https://ihufvqrxdswgbagzhydb.supabase.co',
   supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   metaAppId: process.env.META_APP_ID,
   metaAppSecret: process.env.META_APP_SECRET,
   verifyToken: process.env.VERIFY_TOKEN,
+  pageTokenEncKey: process.env.PAGE_TOKEN_ENC_KEY || '',
   apiKey: process.env.API_KEY,
+  bootstrapOwnerEmail: (process.env.BOOTSTRAP_OWNER_EMAIL || '').trim().toLowerCase(),
+  defaultOrgId: process.env.DEFAULT_ORG_ID || null,
+  pageId: process.env.PAGE_ID || null,
+  pageAccessToken: process.env.PAGE_ACCESS_TOKEN || null,
   graphApiVersion: process.env.META_GRAPH_API_VERSION || 'v27.0',
   storageBucket: process.env.SUPABASE_STORAGE_BUCKET || 'customer-media',
-  publicBaseUrl: process.env.PUBLIC_BASE_URL || 'https://pyincc-ai-app.onrender.com',
+  publicBaseUrl: process.env.PUBLIC_BASE_URL || 'https://pyincccrm.bothelper.vn',
 };
 
 const requiredConfig = [
@@ -34,12 +41,18 @@ const supabase = config.supabaseUrl && config.supabaseServiceRoleKey
     })
   : null;
 
-// Diagnostic counters are intentionally in-memory; authoritative event storage is webhook_events.
 const webhookDiagnostics = { received: 0, lastReceivedAt: null, lastPageId: null, lastKinds: [] };
 
+function asyncHandler(fn) {
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
+
 function getEncryptionKey() {
-  if (!config.metaAppSecret) throw new Error('Missing META_APP_SECRET for token encryption');
-  return crypto.createHash('sha256').update(`pyincc-page-token-key:${config.metaAppSecret}`).digest();
+  const secretMaterial = config.pageTokenEncKey || config.metaAppSecret;
+  if (!secretMaterial) throw new Error('Missing PAGE_TOKEN_ENC_KEY or META_APP_SECRET for token encryption');
+  return crypto.createHash('sha256').update(`pyincc-page-token-key:${secretMaterial}`).digest();
 }
 
 function encryptPageToken(plainToken) {
@@ -96,15 +109,18 @@ async function resolveOrActivateMembership(user) {
     if (activated) return activated;
   }
 
-  const { count } = await supabase.from('organizations').select('id', { count: 'exact', head: true });
-  if (count === 0) {
-    const { data: newOrg } = await supabase.from('organizations').insert({ name: 'PYINCC Salon' }).select('id').single();
-    if (newOrg?.id) {
-      const { data: ownerMembership } = await supabase.from('memberships').insert({
-        org_id: newOrg.id, user_id: user.id, invited_email: email || null,
-        invited_fb_user_id: fbUserId || null, role: 'owner', status: 'active',
-      }).select('id, org_id, role, status').single();
-      return ownerMembership || null;
+  // Safe owner bootstrap: requires BOOTSTRAP_OWNER_EMAIL to be configured and match the user's email
+  if (config.bootstrapOwnerEmail && email && email === config.bootstrapOwnerEmail) {
+    const { count } = await supabase.from('organizations').select('id', { count: 'exact', head: true });
+    if (count === 0) {
+      const { data: newOrg } = await supabase.from('organizations').insert({ name: 'PYINCC Salon' }).select('id').single();
+      if (newOrg?.id) {
+        const { data: ownerMembership } = await supabase.from('memberships').insert({
+          org_id: newOrg.id, user_id: user.id, invited_email: email,
+          invited_fb_user_id: fbUserId || null, role: 'owner', status: 'active',
+        }).select('id, org_id, role, status').single();
+        return ownerMembership || null;
+      }
     }
   }
   return null;
@@ -119,7 +135,7 @@ async function requireAuth(req, res, next) {
     const { data, error } = await supabase.auth.getUser(token);
     if (error || !data?.user) return res.status(401).json({ error: 'Unauthorized' });
     const membership = await resolveOrActivateMembership(data.user);
-    if (!membership?.org_id || !membership.role) return res.status(403).json({ error: 'Forbidden' });
+    if (!membership?.org_id || !membership.role) return res.status(403).json({ error: 'NO_MEMBERSHIP' });
     req.authUser = data.user;
     req.orgId = membership.org_id;
     req.userRole = membership.role;
@@ -131,7 +147,7 @@ async function requireAuth(req, res, next) {
 
 function requireRole(...allowedRoles) {
   return (req, res, next) => req.userRole && allowedRoles.includes(req.userRole)
-    ? next() : res.status(403).json({ error: 'Forbidden' });
+    ? next() : res.status(403).json({ error: 'FORBIDDEN_ROLE' });
 }
 
 function safeEqual(received, expected) {
@@ -143,6 +159,7 @@ function safeEqual(received, expected) {
 
 function requireInternalApiKey(req, res, next) {
   if (config.apiKey && safeEqual(req.get('x-api-key'), config.apiKey)) return next();
+  if (config.nodeEnv === 'production') return res.status(404).json({ error: 'Not Found' });
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
@@ -181,29 +198,25 @@ app.get('/internal/status', requireInternalApiKey, (_req, res) =>
 app.get('/internal/webhook-status', requireInternalApiKey, (_req, res) =>
   res.json({ ...webhookDiagnostics }));
 
-// Current route exists, but Gemini image generation is not wired into this handler yet.
-app.post('/api/tryon/generate', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '15mb' }), async (req, res) => {
+// Returns 501 Not Implemented until an image generation model is configured (Section 1 & Section 12)
+app.post('/api/tryon/generate', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
   const imageBase64 = String(req.body?.image_base64 || req.body?.imageBase64 || '').trim();
   if (!imageBase64) return res.status(400).json({ error: 'image_base64 is required' });
-  try {
-    const buffer = Buffer.from(imageBase64, 'base64');
-    if (!buffer.length) return res.status(400).json({ error: 'image_base64 is empty' });
-    return res.json({ success: true, result_base64: imageBase64, fallback: true,
-      note: 'AI image generation is not configured on this deployment.' });
-  } catch {
-    return res.status(400).json({ error: 'Invalid image_base64 payload' });
-  }
-});
+  return res.status(501).json({
+    error: 'NOT_IMPLEMENTED',
+    message: 'Chưa có model ghép ảnh trên môi trường này.',
+  });
+}));
 
-app.get('/memberships', requireAuth, requireRole('owner'), async (req, res) => {
+app.get('/memberships', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from('memberships')
     .select('id, org_id, user_id, invited_email, invited_fb_user_id, role, status, created_at')
     .eq('org_id', req.orgId).order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: 'Failed to load memberships' });
   return res.json({ memberships: data || [] });
-});
+}));
 
-app.post('/memberships/invite', requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), async (req, res) => {
+app.post('/memberships/invite', requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const invitedEmail = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : null;
   const invitedFbUserId = typeof req.body?.fbUserId === 'string' ? req.body.fbUserId.trim() : null;
   if (!invitedEmail && !invitedFbUserId) return res.status(400).json({ error: 'email or fbUserId is required to invite staff' });
@@ -213,9 +226,9 @@ app.post('/memberships/invite', requireAuth, requireRole('owner'), express.json(
   }).select('id, org_id, invited_email, invited_fb_user_id, role, status, created_at').single();
   if (error) return res.status(500).json({ error: 'Failed to create staff invitation' });
   return res.json({ success: true, invitation: data });
-});
+}));
 
-app.post('/auth/facebook/exchange-token', requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), async (req, res) => {
+app.post('/auth/facebook/exchange-token', requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   if (!config.metaAppSecret || !config.metaAppId) return res.status(503).json({ error: 'Service Unavailable' });
   const userAccessToken = req.body?.accessToken || req.body?.userAccessToken || req.body?.user_access_token;
   if (typeof userAccessToken !== 'string' || !userAccessToken.trim()) return res.status(400).json({ error: 'accessToken is required' });
@@ -225,27 +238,28 @@ app.post('/auth/facebook/exchange-token', requireAuth, requireRole('owner'), exp
     return res.json({ success: true, org_id: req.orgId, role: req.userRole,
       pages: pages.map((p) => ({ page_id: p.page_id, page_name: p.page_name })) });
   } catch (error) {
+    if (error.code === 'PAGE_ALREADY_BOUND_TO_ANOTHER_ORG') {
+      return res.status(409).json({ error: 'PAGE_ALREADY_BOUND_TO_ANOTHER_ORG' });
+    }
     console.error(JSON.stringify({ event: 'exchange_token_failed', message: error.message }));
     return res.status(401).json({ error: 'Unauthorized' });
   }
-});
+}));
 
-app.post('/auth/facebook/deauthorize', express.urlencoded({ extended: false }), express.json({ limit: '16kb' }), async (req, res) => {
+app.post('/auth/facebook/deauthorize', express.urlencoded({ extended: false }), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   if (!config.metaAppSecret || !supabase) return res.status(503).json({ error: 'Service Unavailable' });
   const parsed = verifyFacebookSignedRequest(req.body?.signed_request);
   if (!parsed?.user_id) return res.status(403).json({ error: 'Forbidden' });
   await supabase.from('connected_pages').delete().eq('connected_by_fb_user_id', String(parsed.user_id));
   return res.json({ success: true });
-});
+}));
 
-app.get('/connected-pages', requireAuth, requireRole('owner', 'staff'), async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('connected_pages').select('page_id, page_name, updated_at')
-      .eq('org_id', req.orgId).order('updated_at', { ascending: false });
-    if (error) return res.status(500).json({ error: 'Failed to load connected pages' });
-    return res.json({ pages: data || [] });
-  } catch { return res.status(500).json({ error: 'Failed to load connected pages' }); }
-});
+app.get('/connected-pages', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+  const { data, error } = await supabase.from('connected_pages').select('page_id, page_name, updated_at')
+    .eq('org_id', req.orgId).order('updated_at', { ascending: false });
+  if (error) return res.status(500).json({ error: 'Failed to load connected pages' });
+  return res.json({ pages: data || [] });
+}));
 
 async function verifyFacebookUserToken(inputToken) {
   const response = await axios.get(`https://graph.facebook.com/${config.graphApiVersion}/debug_token`, {
@@ -285,6 +299,17 @@ async function exchangeUserTokenAndSavePages(userAccessToken, orgId, fbUserId) {
   const savedPages = [];
   for (const page of (Array.isArray(accountsRes.data?.data) ? accountsRes.data.data : [])) {
     if (!page.id || !page.access_token) continue;
+    const pageIdStr = String(page.id);
+
+    // Prevent overwriting org_id if this Page is already bound to a different organization
+    const { data: existingPage } = await supabase.from('connected_pages')
+      .select('org_id').eq('page_id', pageIdStr).maybeSingle();
+    if (existingPage?.org_id && String(existingPage.org_id) !== String(orgId)) {
+      const conflictErr = new Error('Page is already bound to another organization');
+      conflictErr.code = 'PAGE_ALREADY_BOUND_TO_ANOTHER_ORG';
+      throw conflictErr;
+    }
+
     try {
       const proof = crypto.createHmac('sha256', config.metaAppSecret).update(page.access_token).digest('hex');
       await axios.post(`https://graph.facebook.com/${config.graphApiVersion}/${page.id}/subscribed_apps`, null, {
@@ -294,7 +319,7 @@ async function exchangeUserTokenAndSavePages(userAccessToken, orgId, fbUserId) {
     } catch (error) {
       console.warn(JSON.stringify({ event: 'page_webhook_subscribe_warning', pageId: page.id, message: error.message }));
     }
-    const row = { org_id: orgId, page_id: String(page.id), page_name: String(page.name || `Page ${page.id}`),
+    const row = { org_id: orgId, page_id: pageIdStr, page_name: String(page.name || `Page ${page.id}`),
       page_access_token: encryptPageToken(page.access_token), connected_by_fb_user_id: fbUserId || null,
       updated_at: new Date().toISOString() };
     const { error } = await supabase.from('connected_pages').upsert(row, { onConflict: 'page_id' });
@@ -312,54 +337,84 @@ async function resolvePageCredentialsForOrg(orgId, requestedPageId) {
   if (Array.isArray(data) && data.length && data[0].page_access_token) {
     return { pageId: data[0].page_id, pageAccessToken: decryptPageToken(data[0].page_access_token) };
   }
+  if (config.pageId && config.pageAccessToken) {
+    return { pageId: config.pageId, pageAccessToken: config.pageAccessToken };
+  }
   return null;
 }
 
-app.get('/settings', requireAuth, requireRole('owner', 'staff'), async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('salon_settings').select('on_duty, consultation_script, updated_at')
-      .eq('org_id', req.orgId).maybeSingle();
-    if (error) return res.status(500).json({ error: 'Failed to load settings' });
-    return res.json({ onDuty: data ? Boolean(data.on_duty) : true,
-      consultationScript: data ? String(data.consultation_script || '') : '' });
-  } catch { return res.status(500).json({ error: 'Failed to load settings' }); }
-});
+app.get('/settings', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+  const { data, error } = await supabase.from('salon_settings').select('on_duty, consultation_script, updated_at')
+    .eq('org_id', req.orgId).maybeSingle();
+  if (error) return res.status(500).json({ error: 'Failed to load settings' });
+  return res.json({ onDuty: data ? Boolean(data.on_duty) : true,
+    consultationScript: data ? String(data.consultation_script || '') : '' });
+}));
 
-app.put('/settings', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '32kb' }), async (req, res) => {
-  if (typeof req.body?.consultationScript === 'string' && req.userRole !== 'owner') return res.status(403).json({ error: 'Forbidden' });
+app.put('/settings', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '32kb' }), asyncHandler(async (req, res) => {
+  if (typeof req.body?.consultationScript === 'string' && req.userRole !== 'owner') return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   const onDuty = typeof req.body?.onDuty === 'boolean' ? req.body.onDuty : true;
   const payload = { key: `org:${req.orgId}`, org_id: req.orgId, on_duty: onDuty, updated_at: new Date().toISOString() };
   if (req.userRole === 'owner' && typeof req.body?.consultationScript === 'string') payload.consultation_script = req.body.consultationScript.trim();
   const { error } = await supabase.from('salon_settings').upsert(payload, { onConflict: 'key' });
   if (error) return res.status(500).json({ error: 'Failed to save settings' });
   return res.json({ success: true, onDuty });
-});
+}));
 
-app.get('/bookings', requireAuth, requireRole('owner', 'staff'), async (req, res) => {
+app.get('/bookings', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from('bookings').select('*').eq('org_id', req.orgId)
     .order('scheduled_at', { ascending: true }).limit(50);
   if (error) return res.status(500).json({ error: 'Failed to fetch bookings' });
   return res.json({ bookings: data || [] });
-});
+}));
 
-app.post('/bookings', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), async (req, res) => {
+// Normalizes HH:mm or ISO timestamp explicitly to Vietnam timezone (+07:00)
+function parseVietnamScheduledAt(timeSlot) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(timeSlot || '').trim());
+  if (match) {
+    const hh = String(Math.min(Math.max(Number(match[1]), 0), 23)).padStart(2, '0');
+    const mm = String(Math.min(Math.max(Number(match[2]), 0), 59)).padStart(2, '0');
+    const vnNow = new Date(Date.now() + 7 * 3600 * 1000);
+    const yyyy = vnNow.getUTCFullYear();
+    const mo = String(vnNow.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(vnNow.getUTCDate()).padStart(2, '0');
+    return new Date(`${yyyy}-${mo}-${dd}T${hh}:${mm}:00+07:00`).toISOString();
+  }
+  if (timeSlot && !Number.isNaN(Date.parse(timeSlot))) {
+    return new Date(timeSlot).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+app.post('/bookings', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const customerName = String(req.body?.customerName || req.body?.customer_name || '').trim();
   const customerPhone = String(req.body?.customerPhone || req.body?.customer_phone || '').trim();
   const serviceName = String(req.body?.serviceName || req.body?.service_name || '').trim();
   const timeSlot = String(req.body?.time || req.body?.scheduled_at || '').trim();
   if (!customerName || !serviceName) return res.status(400).json({ error: 'customerName and serviceName are required' });
-  let scheduledIso = new Date().toISOString();
-  const match = /^(\d{1,2}):(\d{2})$/.exec(timeSlot);
-  if (match) { const now = new Date(); now.setHours(Number(match[1]), Number(match[2]), 0, 0); scheduledIso = now.toISOString(); }
-  else if (timeSlot && !Number.isNaN(Date.parse(timeSlot))) scheduledIso = new Date(timeSlot).toISOString();
+
+  const scheduledIso = parseVietnamScheduledAt(timeSlot);
+
+  // Prevent double-booking the same slot in the same organization
+  const { data: conflict } = await supabase.from('bookings')
+    .select('id')
+    .eq('org_id', req.orgId)
+    .eq('scheduled_at', scheduledIso)
+    .in('status', ['pending', 'confirmed'])
+    .maybeSingle();
+
+  if (conflict) {
+    return res.status(409).json({ error: 'BOOKING_SLOT_CONFLICT' });
+  }
+
   const { data, error } = await supabase.from('bookings').insert({ org_id: req.orgId,
     customer_name: customerName, customer_phone: customerPhone, service_name: serviceName,
     scheduled_at: scheduledIso, status: 'confirmed' }).select('*').single();
   if (error) return res.status(500).json({ error: 'Failed to create booking' });
   return res.json({ success: true, booking: data });
-});
+}));
 
-app.post('/messages/:id/approve', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), async (req, res) => {
+app.post('/messages/:id/approve', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const messageRowId = String(req.params.id || '').trim();
   const draftReply = String(req.body?.text || req.body?.draftReply || '').trim();
   if (!messageRowId || !draftReply) return res.status(400).json({ error: 'message id and text are required' });
@@ -371,21 +426,37 @@ app.post('/messages/:id/approve', requireAuth, requireRole('owner', 'staff'), ex
     .select('id, org_id, customer_psid, draft_reply, approval_status, approved_by, approved_at').single();
   if (error || !data) return res.status(404).json({ error: 'Message record not found in your organization' });
   return res.json({ success: true, approval: data });
-});
+}));
 
-app.post('/send-message', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), async (req, res) => {
+app.post('/send-message', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const messageRecordId = String(req.body?.messageRecordId || req.body?.message_record_id || '').trim();
   const requestedPageId = req.body?.pageId || req.body?.page_id;
   if (!messageRecordId) return res.status(400).json({ error: 'messageRecordId is required; approve the message first' });
+
   const { data: msg, error: fetchErr } = await supabase.from('conversation_messages')
     .select('id, org_id, customer_psid, draft_reply, approval_status, approved_by, approved_at')
     .eq('id', messageRecordId).eq('org_id', req.orgId).single();
   if (fetchErr || !msg) return res.status(404).json({ error: 'Message record not found in your organization' });
-  if (msg.approval_status !== 'approved' || !msg.approved_by || !msg.approved_at || !msg.draft_reply) {
-    return res.status(403).json({ error: 'Message has not been approved in database' });
+  if (msg.approval_status === 'sending' || msg.approval_status === 'sent') {
+    return res.status(409).json({ error: 'ALREADY_SENT_OR_SENDING' });
   }
+  if (msg.approval_status !== 'approved' || !msg.approved_by || !msg.approved_at || !msg.draft_reply) {
+    return res.status(403).json({ error: 'NOT_APPROVED' });
+  }
+
   const page = await resolvePageCredentialsForOrg(req.orgId, requestedPageId);
   if (!page) return res.status(503).json({ error: 'Chưa có Fanpage nào được kết nối cho tiệm của bạn.' });
+
+  // Atomic lock: claim row by setting approval_status = 'sending' only if still 'approved'
+  const { data: claimed } = await supabase.from('conversation_messages')
+    .update({ approval_status: 'sending' })
+    .eq('id', msg.id)
+    .eq('org_id', req.orgId)
+    .eq('approval_status', 'approved')
+    .select('id')
+    .maybeSingle();
+  if (!claimed) return res.status(409).json({ error: 'ALREADY_SENT_OR_SENDING' });
+
   try {
     const response = await axios.post(`https://graph.facebook.com/${config.graphApiVersion}/${page.pageId}/messages`, {
       recipient: { id: String(msg.customer_psid).trim() }, messaging_type: 'RESPONSE', message: { text: String(msg.draft_reply).trim() },
@@ -399,12 +470,13 @@ app.post('/send-message', requireAuth, requireRole('owner', 'staff'), express.js
       { onConflict: 'message_id', ignoreDuplicates: true });
     return res.json({ success: true, data: response.data });
   } catch (error) {
+    await supabase.from('conversation_messages').update({ approval_status: 'approved' }).eq('id', msg.id).eq('org_id', req.orgId);
     console.error(JSON.stringify({ event: 'send_message_failed', status: error.response?.status }));
-    return res.status(502).json({ error: 'Failed to send message through Meta' });
+    return res.status(502).json({ error: 'META_SEND_FAILED' });
   }
-});
+}));
 
-app.post('/tryon-drafts', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '15mb' }), async (req, res) => {
+app.post('/tryon-drafts', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
   const recipientId = String(req.body?.recipientId || req.body?.recipient_id || '').trim();
   const imageBase64 = String(req.body?.imageBase64 || req.body?.image_base64 || '').trim();
   const caption = String(req.body?.caption || '').trim();
@@ -424,18 +496,31 @@ app.post('/tryon-drafts', requireAuth, requireRole('owner', 'staff'), express.js
     .select('id, org_id, storage_path, approval_status, approved_by, approved_at').single();
   if (error || !media) return res.status(500).json({ error: 'Failed to persist approved Try-On media record' });
   return res.json({ success: true, media });
-});
+}));
 
-app.post('/send-tryon-image', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), async (req, res) => {
+app.post('/send-tryon-image', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const mediaRecordId = String(req.body?.mediaRecordId || req.body?.media_record_id || '').trim();
   if (!mediaRecordId) return res.status(400).json({ error: 'mediaRecordId is required' });
   const { data: media, error } = await supabase.from('customer_media')
     .select('id, org_id, storage_path, recipient_psid, caption, approval_status, approved_by, approved_at')
     .eq('id', mediaRecordId).eq('org_id', req.orgId).single();
   if (error || !media) return res.status(404).json({ error: 'Try-On media record not found in your organization' });
-  if (media.approval_status !== 'approved' || !media.approved_by || !media.approved_at || !media.storage_path) {
-    return res.status(403).json({ error: 'Try-On image has not been approved in database' });
+  if (media.approval_status === 'sending' || media.approval_status === 'sent') {
+    return res.status(409).json({ error: 'ALREADY_SENT_OR_SENDING' });
   }
+  if (media.approval_status !== 'approved' || !media.approved_by || !media.approved_at || !media.storage_path) {
+    return res.status(403).json({ error: 'NOT_APPROVED' });
+  }
+
+  const { data: claimed } = await supabase.from('customer_media')
+    .update({ approval_status: 'sending' })
+    .eq('id', media.id)
+    .eq('org_id', req.orgId)
+    .eq('approval_status', 'approved')
+    .select('id')
+    .maybeSingle();
+  if (!claimed) return res.status(409).json({ error: 'ALREADY_SENT_OR_SENDING' });
+
   try {
     const signedUrl = await createSignedUrl(media.storage_path, 3600);
     const recipientId = String(media.recipient_psid || '').trim();
@@ -452,36 +537,34 @@ app.post('/send-tryon-image', requireAuth, requireRole('owner', 'staff'), expres
     await supabase.from('customer_media').update({ approval_status: 'sent' }).eq('id', media.id).eq('org_id', req.orgId);
     return res.json({ success: true, signedUrl, deliveredToMessenger: Boolean(recipientId && page) });
   } catch (error) {
+    await supabase.from('customer_media').update({ approval_status: 'approved' }).eq('id', media.id).eq('org_id', req.orgId);
     console.error(JSON.stringify({ event: 'send_tryon_failed', status: error.response?.status }));
-    return res.status(502).json({ error: 'Could not deliver Try-On image' });
+    return res.status(502).json({ error: 'META_SEND_FAILED' });
   }
-});
+}));
 
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-  if (mode === 'subscribe' && token === config.verifyToken && typeof challenge === 'string') return res.status(200).send(challenge);
+  if (mode === 'subscribe' && config.verifyToken && typeof token === 'string' && safeEqual(token, config.verifyToken) && typeof challenge === 'string') {
+    return res.status(200).send(challenge);
+  }
   return res.sendStatus(403);
 });
 
-app.get('/messages', requireAuth, requireRole('owner', 'staff'), async (req, res) => {
+app.get('/messages', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
-  try {
-    const { data, error } = await supabase.from('conversation_messages').select('*').eq('org_id', req.orgId)
-      .order('created_at', { ascending: false }).limit(limit);
-    if (error) {
-      console.error(JSON.stringify({ event: 'fetch_messages_failed', message: error.message }));
-      return res.status(500).json({ error: 'Failed to fetch messages' });
-    }
-    return res.json({ messages: data || [] });
-  } catch (error) {
-    console.error(JSON.stringify({ event: 'fetch_messages_exception', message: error.message }));
+  const { data, error } = await supabase.from('conversation_messages').select('*').eq('org_id', req.orgId)
+    .order('created_at', { ascending: false }).limit(limit);
+  if (error) {
+    console.error(JSON.stringify({ event: 'fetch_messages_failed', message: error.message }));
     return res.status(500).json({ error: 'Failed to fetch messages' });
   }
-});
+  return res.json({ messages: data || [] });
+}));
 
-async function recordWebhookSignal({ eventId, eventType, pageId, senderPsid, messageId, messageType, messageText, rawPayload }) {
+async function recordWebhookSignal({ eventId, eventType, senderPsid, messageId, messageType, messageText, rawPayload }) {
   if (!supabase) return;
   const { error } = await supabase.from('webhook_events').upsert({
     event_id: eventId,
@@ -508,7 +591,7 @@ function classifyWebhookEvent(event) {
   return 'messaging_other';
 }
 
-app.post('/webhook', express.raw({ type: 'application/json', limit: '10mb' }), async (req, res) => {
+app.post('/webhook', express.raw({ type: 'application/json', limit: '10mb' }), asyncHandler(async (req, res) => {
   if (!config.metaAppSecret || !supabase) return res.status(503).send('Service Unavailable');
   const rawBody = req.body;
   if (!Buffer.isBuffer(rawBody) || rawBody.length === 0) return res.status(400).send('Missing body');
@@ -526,25 +609,42 @@ app.post('/webhook', express.raw({ type: 'application/json', limit: '10mb' }), a
     for (const entry of (Array.isArray(payload.entry) ? payload.entry : [])) {
       const pageId = entry.id ? String(entry.id) : null;
       const orgId = await resolveOrgIdByPageId(pageId);
+
       for (const event of (Array.isArray(entry.messaging) ? entry.messaging : [])) {
         const eventType = classifyWebhookEvent(event);
         webhookDiagnostics.received += 1;
         webhookDiagnostics.lastReceivedAt = new Date().toISOString();
         webhookDiagnostics.lastPageId = pageId;
         webhookDiagnostics.lastKinds = [eventType];
-        console.log(JSON.stringify({ event: 'meta_webhook_event_received', eventType, pageId,
-          orgMapped: Boolean(orgId), hasMessage: Boolean(event.message), isEcho: Boolean(event.message?.is_echo) }));
 
         if (event.message) {
           await handleFacebookMessage(orgId, pageId, event, event.message);
         } else {
           const signalId = eventIdForSignal(pageId, event);
-          await recordWebhookSignal({ eventId: signalId, eventType, pageId,
+          await recordWebhookSignal({ eventId: signalId, eventType,
             senderPsid: event.sender?.id || event.recipient?.id,
             rawPayload: { pageId, event } });
         }
       }
-      // Also capture webhook formats that deliver message events under changes.
+
+      // Handle Meta Handover Protocol standby channel events
+      for (const standbyEvent of (Array.isArray(entry.standby) ? entry.standby : [])) {
+        const eventType = 'messaging_standby';
+        webhookDiagnostics.received += 1;
+        webhookDiagnostics.lastReceivedAt = new Date().toISOString();
+        webhookDiagnostics.lastPageId = pageId;
+        webhookDiagnostics.lastKinds = [eventType];
+        const signalId = eventIdForSignal(pageId, standbyEvent);
+        await recordWebhookSignal({
+          eventId: signalId,
+          eventType,
+          senderPsid: standbyEvent.sender?.id || standbyEvent.recipient?.id,
+          messageId: standbyEvent.message?.mid || null,
+          messageText: typeof standbyEvent.message?.text === 'string' ? standbyEvent.message.text : null,
+          rawPayload: { pageId, standby: standbyEvent },
+        });
+      }
+
       for (const change of (Array.isArray(entry.changes) ? entry.changes : [])) {
         const value = change.value || {};
         for (const message of (Array.isArray(value.messages) ? value.messages : [])) {
@@ -554,8 +654,6 @@ app.post('/webhook', express.raw({ type: 'application/json', limit: '10mb' }), a
           webhookDiagnostics.lastReceivedAt = new Date().toISOString();
           webhookDiagnostics.lastPageId = pageId;
           webhookDiagnostics.lastKinds = [eventType];
-          console.log(JSON.stringify({ event: 'meta_webhook_event_received', eventType, pageId,
-            orgMapped: Boolean(orgId), hasMessage: true, isEcho: Boolean(message.is_echo) }));
           await handleFacebookMessage(orgId, pageId, event, message);
         }
       }
@@ -565,7 +663,7 @@ app.post('/webhook', express.raw({ type: 'application/json', limit: '10mb' }), a
     return res.status(500).send('Processing failed');
   }
   return res.status(200).send('EVENT_RECEIVED');
-});
+}));
 
 function eventIdForSignal(pageId, event) {
   const eventTime = event.timestamp || '';
@@ -575,9 +673,9 @@ function eventIdForSignal(pageId, event) {
 }
 
 async function resolveOrgIdByPageId(pageId) {
-  if (!pageId || !supabase) return null;
+  if (!pageId || !supabase) return config.defaultOrgId;
   const { data } = await supabase.from('connected_pages').select('org_id').eq('page_id', pageId).maybeSingle();
-  return data?.org_id || null;
+  return data?.org_id || config.defaultOrgId;
 }
 
 async function handleFacebookMessage(orgId, pageId, event, message) {
@@ -594,8 +692,7 @@ async function handleFacebookMessage(orgId, pageId, event, message) {
   const eventType = isEcho ? 'facebook_message_echo' : 'facebook_message_inbound';
   const eventId = messageId || eventIdForSignal(pageId, event);
 
-  // Keep the raw Meta signal even if this Page has not yet been mapped to an organization.
-  await recordWebhookSignal({ eventId, eventType, pageId, senderPsid, messageId,
+  await recordWebhookSignal({ eventId, eventType, senderPsid, messageId,
     messageType: attachment?.type || 'text', messageText, rawPayload: { pageId, event, message } });
   if (!orgId) {
     console.warn(JSON.stringify({ event: 'webhook_message_unmapped_page', pageId, eventType }));
@@ -674,5 +771,13 @@ async function uploadWithRetry(path, buffer, mimeType, maxRetries = 3) {
   }
   return { error: lastError };
 }
+
+app.use((err, _req, res, _next) => {
+  if (err?.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'BAD_JSON' });
+  }
+  console.error(JSON.stringify({ event: 'unhandled_route_error', message: err?.message || 'unknown' }));
+  return res.status(500).json({ error: 'SERVER_ERROR' });
+});
 
 app.listen(port, () => console.log(JSON.stringify({ event: 'server_started', service: 'pyincc-meta-webhook', port })));

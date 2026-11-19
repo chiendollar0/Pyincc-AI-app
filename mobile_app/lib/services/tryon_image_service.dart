@@ -52,6 +52,12 @@ class TryOnImageService {
       throw Exception('Không kết nối được backend thử ảnh: $e');
     }
 
+    if (response.statusCode == 501) {
+      throw Exception(
+        'Tính năng ghép ảnh AI đang chờ kích hoạt model trên máy chủ (HTTP 501).',
+      );
+    }
+
     if (response.statusCode != 200) {
       var detail = response.body;
       if (detail.length > 300) detail = '${detail.substring(0, 300)}...';
@@ -80,7 +86,7 @@ class TryOnImageService {
 
     final response = await http.post(
       url,
-      headers: {'Content-Type': 'application/json'},
+      headers: _jsonHeaders(),
       body: jsonEncode({
         'image_base64': base64Encode(bytes),
         'catalog': catalog,

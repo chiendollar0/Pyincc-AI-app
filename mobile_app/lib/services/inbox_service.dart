@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 class InboxService {
-  static const String defaultBackendUrl = 'https://pyincc-ai-app.onrender.com';
+  static const String defaultBackendUrl = 'https://pyincccrm.bothelper.vn';
 
   final String webhookBaseUrl;
   final String supabaseUrl;
