@@ -29,6 +29,15 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders += mapOf(
+            "facebookAppId" to "1555273769742937",
+            "fbLoginScheme" to "fb1555273769742937",
+            "facebookClientToken" to (
+                (project.findProperty("FB_CLIENT_TOKEN") as String?)
+                    ?: System.getenv("FB_CLIENT_TOKEN")
+                    ?: "CHANGE_ME"
+            ),
+        )
     }
 
     signingConfigs {

@@ -5,127 +5,87 @@ import 'package:pyincc_app/main.dart';
 
 void main() {
   testWidgets(
-    '1. Login screen renders by default, enters Demo mode, and Trung tam CSKH AI renders KPIs & approval dialog',
+    '1. Login screen renders Pyincc brand header and validates empty credentials',
     (WidgetTester tester) async {
       await tester.pumpWidget(const BeautyCrmApp());
       await tester.pump();
 
-      // Verify LoginScreen is shown first
-      expect(find.text('Đăng nhập • Pyincc AI CRM'), findsOneWidget);
+      expect(find.text('Pyincc AI CRM'), findsOneWidget);
       expect(find.text('Email đăng nhập'), findsOneWidget);
       expect(find.text('Mật khẩu'), findsOneWidget);
-      expect(find.text('Xem giao diện Demo (Offline)'), findsOneWidget);
+      expect(find.text('Đăng nhập'), findsOneWidget);
 
-      // Enter offline Demo mode
-      await tester.tap(find.text('Xem giao diện Demo (Offline)'));
+      // Submit empty credentials -> friendly Vietnamese message without raw technical text
+      await tester.tap(find.text('Đăng nhập'));
       await tester.pumpAndSettle();
+      expect(
+        find.text('Vui lòng nhập đầy đủ Email và Mật khẩu.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Exception'), findsNothing);
+      expect(find.textContaining('HTTP'), findsNothing);
 
-      // Verify AppBar & KPI badges
-      expect(find.text('Trung tâm CSKH AI'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    '2. Signed-in dashboard renders BrandHeader, KPIs, Studio AI catalog, and Logout',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(
+        const BeautyCrmApp(initialAuthToken: 'session-token-for-widget-test'),
+      );
+      await tester.pump();
+
+      // Tab 1: Hộp thư AI (no hardcoded customer names)
+      expect(find.text('Hộp thư AI'), findsWidgets);
       expect(find.text('Tổng hội thoại'), findsOneWidget);
       expect(find.text('Ca khó / Sửa'), findsOneWidget);
       expect(find.text('Hỏi giá / Lịch'), findsOneWidget);
-
-      // Verify demo triage conversations are visible
-      expect(find.text('Chị Minh Thư (FB)'), findsOneWidget);
-      expect(find.text('Thanh Trúc (Zalo)'), findsOneWidget);
-
-      // Filter by 'Ca khó (1)'
-      await tester.tap(find.textContaining('Ca khó ('));
-      await tester.pump();
-      expect(find.text('Chị Minh Thư (FB)'), findsOneWidget);
+      expect(find.text('Chị Minh Thư (FB)'), findsNothing);
       expect(find.text('Thanh Trúc (Zalo)'), findsNothing);
 
-      // Reset filter to 'Tất cả'
-      await tester.tap(find.textContaining('Tất cả ('));
-      await tester.pump();
-      expect(find.text('Thanh Trúc (Zalo)'), findsOneWidget);
-
-      // Open human-in-the-loop approval dialog
-      await tester.tap(find.text('Duyệt & Gửi').first);
+      // Switch to Tab 2: Studio AI
+      await tester.tap(find.text('Studio AI').last);
       await tester.pumpAndSettle();
-      expect(
-        find.textContaining('Duyệt & gửi cho Chị Minh Thư'),
-        findsOneWidget,
-      );
-      expect(find.text('Xác nhận gửi'), findsOneWidget);
-
-      // Cancel dialog
-      await tester.tap(find.text('Hủy'));
-      await tester.pumpAndSettle();
-
-      // Verify logout button returns to LoginScreen
-      await tester.tap(find.byIcon(Icons.logout).first);
-      await tester.pumpAndSettle();
-      expect(find.text('Đăng nhập • Pyincc AI CRM'), findsOneWidget);
-
-      // Unmount to dispose periodic polling timer cleanly
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-  );
-
-  testWidgets(
-    '2. Studio AI tab filters catalog items and enforces human approval state',
-    (WidgetTester tester) async {
-      await tester.pumpWidget(const BeautyCrmApp(startInDemoMode: true));
-      await tester.pump();
-
-      // Navigate to Tab 2 (Studio AI) via quick button on chat card
-      await tester.tap(find.text('Thử mẫu AI').first);
-      await tester.pumpAndSettle();
-
-      expect(find.text('Studio AI • Thử Mày & Môi'), findsOneWidget);
       expect(find.text('Chưa có ảnh mặt mộc của khách'), findsOneWidget);
 
-      // Filter catalog by 'Môi'
       await tester.tap(find.widgetWithText(ChoiceChip, 'Môi'));
       await tester.pump();
-      expect(
-        find.textContaining('Môi Collagen Cam Đào'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('Môi Collagen Cam Đào'), findsOneWidget);
 
-      // Filter catalog by 'Chân mày'
       await tester.tap(find.widgetWithText(ChoiceChip, 'Chân mày'));
       await tester.pump();
-      expect(
-        find.textContaining('Mày sợi Hairstroke Nâu Tây'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('Mày sợi Hairstroke Nâu Tây'), findsOneWidget);
+
+      // Verify Logout returns to LoginScreen
+      await tester.tap(find.byIcon(Icons.logout).first);
+      await tester.pumpAndSettle();
+      expect(find.text('Email đăng nhập'), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
 
   testWidgets(
-    '3. Quan ly Tiem tab manages schedule/duty and enforces Zero-Key UI for owner',
+    '3. Quan ly tiem tab manages Facebook connect and enforces Zero-Key UI',
     (WidgetTester tester) async {
-      await tester.pumpWidget(const BeautyCrmApp(startInDemoMode: true));
+      await tester.pumpWidget(
+        const BeautyCrmApp(initialAuthToken: 'session-token-for-widget-test'),
+      );
       await tester.pump();
 
-      // Navigate to Tab 3 (Quản lý Tiệm)
-      await tester.tap(find.text('Quản lý Tiệm'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Quản lý Vận hành & Tiệm'), findsOneWidget);
-      expect(find.text('Trạng thái Ca trực nhận khách AI'), findsOneWidget);
-
-      // Open quick booking dialog
-      await tester.tap(find.text('Đặt lịch mới'));
-      await tester.pumpAndSettle();
-      expect(find.text('Tạo lịch hẹn mới'), findsOneWidget);
-      await tester.tap(find.text('Hủy'));
+      await tester.tap(find.text('Quản lý tiệm').last);
       await tester.pumpAndSettle();
 
       // Switch to sub-tab 'Kết nối & Chủ tiệm'
       await tester.tap(find.text('Kết nối & Chủ tiệm'));
       await tester.pumpAndSettle();
 
-      // Verify 1-click Facebook connect button & script editor exist
       expect(find.text('Kết nối với Facebook'), findsOneWidget);
       expect(find.text('Lưu kịch bản & bảng giá'), findsOneWidget);
 
-      // Verify Zero-Key UI: no API key or secret inputs are exposed to the owner
+      // Zero-Key UI: never expose backend secrets
       expect(find.textContaining('API Key'), findsNothing);
       expect(find.textContaining('SUPABASE_SERVICE_ROLE_KEY'), findsNothing);
       expect(find.textContaining('META_APP_SECRET'), findsNothing);

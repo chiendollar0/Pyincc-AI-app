@@ -1,7 +1,4 @@
-import 'dart:convert';
-import 'dart:io';
-
-import 'package:http/http.dart' as http;
+import 'api_client.dart';
 
 class InboxService {
   static const String defaultBackendUrl = 'https://pyincccrm.bothelper.vn';
@@ -21,81 +18,20 @@ class InboxService {
     ),
   });
 
-  Map<String, String> _authHeaders({bool json = false}) {
-    final headers = <String, String>{};
-    if (json) {
-      headers['Content-Type'] = 'application/json';
-    }
-    final token = authToken.trim();
-    if (token.isNotEmpty) {
-      headers['Authorization'] = 'Bearer $token';
-    }
-    return headers;
-  }
+  ApiClient get apiClient => ApiClient(
+        baseUrl: webhookBaseUrl,
+        authToken: authToken,
+      );
 
   bool get hasWebhookConfig => webhookBaseUrl.trim().isNotEmpty;
 
-  bool get hasSupabaseRestConfig =>
-      supabaseUrl.trim().isNotEmpty && supabaseAnonKey.trim().isNotEmpty;
-
-  String get facebookOAuthUrl {
-    final base = webhookBaseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
-    return '$base/auth/facebook';
-  }
-
-  Uri _webhookEndpoint(String path) {
-    final base = webhookBaseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
-    return Uri.parse('$base$path');
-  }
-
   Future<List<Map<String, dynamic>>> fetchConnectedPages() async {
     if (!hasWebhookConfig) return const [];
-    try {
-      final response = await http
-          .get(
-            _webhookEndpoint('/connected-pages'),
-            headers: _authHeaders(),
-          )
-          .timeout(const Duration(seconds: 12));
-      if (response.statusCode != 200) return const [];
-      final decoded = jsonDecode(response.body);
-      if (decoded is Map<String, dynamic> && decoded['pages'] is List) {
-        return (decoded['pages'] as List)
-            .whereType<Map<String, dynamic>>()
-            .toList();
-      }
-      return const [];
-    } catch (_) {
-      return const [];
-    }
-  }
-
-  Future<List<Map<String, dynamic>>> exchangeFacebookUserToken(
-    String userAccessToken,
-  ) async {
-    late final http.Response response;
-    try {
-      response = await http
-          .post(
-            _webhookEndpoint('/auth/facebook/exchange-token'),
-            headers: _authHeaders(json: true),
-            body: jsonEncode({
-              'accessToken': userAccessToken.trim(),
-            }),
-          )
-          .timeout(const Duration(seconds: 20));
-    } on SocketException catch (e) {
-      throw Exception('Không kết nối được máy chủ PYINCC: $e');
-    }
-
-    if (response.statusCode != 200) {
-      throw Exception(
-        'Kết nối Facebook chưa hoàn tất (HTTP ${response.statusCode}).',
-      );
-    }
-
-    final decoded = jsonDecode(response.body);
-    if (decoded is Map<String, dynamic> && decoded['pages'] is List) {
+    final decoded = await apiClient.get(
+      '/connected-pages',
+      timeout: const Duration(seconds: 12),
+    );
+    if (decoded['pages'] is List) {
       return (decoded['pages'] as List)
           .whereType<Map<String, dynamic>>()
           .toList();
@@ -104,79 +40,16 @@ class InboxService {
   }
 
   Future<List<Map<String, dynamic>>> fetchMessages({int limit = 30}) async {
-    if (hasWebhookConfig) {
-      return _fetchFromWebhookBackend(limit: limit);
+    if (!hasWebhookConfig) return const [];
+    final decoded = await apiClient.get(
+      '/messages?limit=$limit',
+      timeout: const Duration(seconds: 15),
+    );
+    if (decoded['messages'] is! List) {
+      throw const ApiException(0, 'Dữ liệu hộp thư không đúng định dạng.');
     }
-    if (hasSupabaseRestConfig) {
-      return _fetchFromSupabaseRest(limit: limit);
-    }
-    return const [];
-  }
-
-  Future<List<Map<String, dynamic>>> _fetchFromWebhookBackend({
-    required int limit,
-  }) async {
-    late final http.Response response;
-    try {
-      response = await http
-          .get(
-            _webhookEndpoint('/messages?limit=$limit'),
-            headers: _authHeaders(),
-          )
-          .timeout(const Duration(seconds: 15));
-    } on SocketException catch (e) {
-      throw Exception('Không kết nối được máy chủ: $e');
-    }
-
-    if (response.statusCode != 200) {
-      throw Exception('Máy chủ đang khởi động (HTTP ${response.statusCode}).');
-    }
-
-    final decoded = jsonDecode(response.body);
-    if (decoded is! Map<String, dynamic> || decoded['messages'] is! List) {
-      throw Exception('Dữ liệu hộp thư không đúng định dạng.');
-    }
-
     final rawList = decoded['messages'] as List;
     return rawList
-        .whereType<Map<String, dynamic>>()
-        .map(_mapRowToTriageItem)
-        .toList();
-  }
-
-  Future<List<Map<String, dynamic>>> _fetchFromSupabaseRest({
-    required int limit,
-  }) async {
-    final base = supabaseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
-    final uri = Uri.parse(
-      '$base/rest/v1/conversation_messages?select=*&order=created_at.desc&limit=$limit',
-    );
-
-    late final http.Response response;
-    try {
-      response = await http
-          .get(
-            uri,
-            headers: {
-              'apikey': supabaseAnonKey.trim(),
-              'Authorization': 'Bearer ${supabaseAnonKey.trim()}',
-            },
-          )
-          .timeout(const Duration(seconds: 15));
-    } on SocketException catch (e) {
-      throw Exception('Không kết nối được dữ liệu: $e');
-    }
-
-    if (response.statusCode != 200) {
-      throw Exception('Lỗi tải dữ liệu (HTTP ${response.statusCode}).');
-    }
-
-    final decoded = jsonDecode(response.body);
-    if (decoded is! List) {
-      throw Exception('Dữ liệu trả về không phải danh sách.');
-    }
-
-    return decoded
         .whereType<Map<String, dynamic>>()
         .map(_mapRowToTriageItem)
         .toList();
@@ -187,46 +60,20 @@ class InboxService {
     required String recipientId,
     required String text,
   }) async {
-    late final http.Response approveRes;
-    late final http.Response sendRes;
-    try {
-      // Step 1: Persist staff approval (approved_by, approved_at) in database
-      approveRes = await http
-          .post(
-            _webhookEndpoint('/messages/${Uri.encodeComponent(messageRecordId.trim())}/approve'),
-            headers: _authHeaders(json: true),
-            body: jsonEncode({
-              'text': text.trim(),
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
+    await apiClient.post(
+      '/messages/${Uri.encodeComponent(messageRecordId.trim())}/approve',
+      {'text': text.trim()},
+      timeout: const Duration(seconds: 15),
+    );
 
-      if (approveRes.statusCode != 200) {
-        throw Exception(
-          'Chưa duyệt được tin nhắn trong DB (HTTP ${approveRes.statusCode}).',
-        );
-      }
-
-      // Step 2: Server verifies database approval state and sends to Messenger
-      sendRes = await http
-          .post(
-            _webhookEndpoint('/send-message'),
-            headers: _authHeaders(json: true),
-            body: jsonEncode({
-              'messageRecordId': messageRecordId.trim(),
-              'recipientId': recipientId.trim(),
-            }),
-          )
-          .timeout(const Duration(seconds: 20));
-    } on SocketException catch (e) {
-      throw Exception('Không kết nối được máy chủ gửi tin: $e');
-    }
-
-    if (sendRes.statusCode != 200) {
-      throw Exception(
-        'Chưa gửi được tin nhắn (HTTP ${sendRes.statusCode}). Vui lòng kiểm tra đăng nhập và kết nối Facebook.',
-      );
-    }
+    await apiClient.post(
+      '/send-message',
+      {
+        'messageRecordId': messageRecordId.trim(),
+        'recipientId': recipientId.trim(),
+      },
+      timeout: const Duration(seconds: 20),
+    );
   }
 
   Future<Map<String, dynamic>> fetchSettings() async {
@@ -236,26 +83,10 @@ class InboxService {
         'consultationScript': '',
       };
     }
-    try {
-      final response = await http
-          .get(
-            _webhookEndpoint('/settings'),
-            headers: _authHeaders(),
-          )
-          .timeout(const Duration(seconds: 12));
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        if (decoded is Map<String, dynamic>) {
-          return decoded;
-        }
-      }
-    } catch (_) {
-      // Fallback below
-    }
-    return const {
-      'onDuty': true,
-      'consultationScript': '',
-    };
+    return apiClient.get(
+      '/settings',
+      timeout: const Duration(seconds: 12),
+    );
   }
 
   Future<void> saveSettings({
@@ -267,68 +98,46 @@ class InboxService {
     if (consultationScript != null) {
       payload['consultationScript'] = consultationScript.trim();
     }
-
-    late final http.Response response;
-    try {
-      response = await http
-          .put(
-            _webhookEndpoint('/settings'),
-            headers: _authHeaders(json: true),
-            body: jsonEncode(payload),
-          )
-          .timeout(const Duration(seconds: 15));
-    } on SocketException catch (e) {
-      throw Exception('Không kết nối được máy chủ để lưu cấu hình: $e');
-    }
-
-    if (response.statusCode != 200) {
-      throw Exception('Lưu cấu hình thất bại (HTTP ${response.statusCode}).');
-    }
+    await apiClient.put(
+      '/settings',
+      payload,
+      timeout: const Duration(seconds: 15),
+    );
   }
 
   Future<List<Map<String, String>>> fetchBookings() async {
     if (!hasWebhookConfig) return const [];
-    try {
-      final response = await http
-          .get(
-            _webhookEndpoint('/bookings'),
-            headers: _authHeaders(),
-          )
-          .timeout(const Duration(seconds: 12));
-      if (response.statusCode != 200) return const [];
-      final decoded = jsonDecode(response.body);
-      if (decoded is Map<String, dynamic> && decoded['bookings'] is List) {
-        final rawList = decoded['bookings'] as List;
-        return rawList.whereType<Map<String, dynamic>>().map((row) {
-          final rawTime = (row['scheduled_at'] ?? '').toString();
-          String formattedTime = rawTime;
-          final parsed = DateTime.tryParse(rawTime);
-          if (parsed != null) {
-            final local = parsed.toLocal();
-            final hh = local.hour.toString().padLeft(2, '0');
-            final mm = local.minute.toString().padLeft(2, '0');
-            formattedTime = '$hh:$mm';
-          }
-          final phone = (row['customer_phone'] ?? '').toString().trim();
-          final name = (row['customer_name'] ?? 'Khách hàng').toString().trim();
-          final statusRaw = (row['status'] ?? 'confirmed').toString();
-          final statusLabel = statusRaw == 'pending'
-              ? 'Chờ xác nhận'
-              : statusRaw == 'done'
-                  ? 'Hoàn thành'
-                  : 'Đã chốt';
-          return <String, String>{
-            'time': formattedTime,
-            'customer': phone.isNotEmpty ? '$name ($phone)' : name,
-            'service': (row['service_name'] ?? '').toString(),
-            'status': statusLabel,
-          };
-        }).toList();
+    final decoded = await apiClient.get(
+      '/bookings',
+      timeout: const Duration(seconds: 12),
+    );
+    if (decoded['bookings'] is! List) return const [];
+    final rawList = decoded['bookings'] as List;
+    return rawList.whereType<Map<String, dynamic>>().map((row) {
+      final rawTime = (row['scheduled_at'] ?? '').toString();
+      String formattedTime = rawTime;
+      final parsed = DateTime.tryParse(rawTime);
+      if (parsed != null) {
+        final local = parsed.toLocal();
+        final hh = local.hour.toString().padLeft(2, '0');
+        final mm = local.minute.toString().padLeft(2, '0');
+        formattedTime = '$hh:$mm';
       }
-      return const [];
-    } catch (_) {
-      return const [];
-    }
+      final phone = (row['customer_phone'] ?? '').toString().trim();
+      final name = (row['customer_name'] ?? 'Khách hàng').toString().trim();
+      final statusRaw = (row['status'] ?? 'confirmed').toString();
+      final statusLabel = statusRaw == 'pending'
+          ? 'Chờ xác nhận'
+          : statusRaw == 'done'
+              ? 'Hoàn thành'
+              : 'Đã chốt';
+      return <String, String>{
+        'time': formattedTime,
+        'customer': phone.isNotEmpty ? '$name ($phone)' : name,
+        'service': (row['service_name'] ?? '').toString(),
+        'status': statusLabel,
+      };
+    }).toList();
   }
 
   Future<Map<String, String>> createBooking({
@@ -336,27 +145,15 @@ class InboxService {
     required String customerName,
     required String serviceName,
   }) async {
-    late final http.Response response;
-    try {
-      response = await http
-          .post(
-            _webhookEndpoint('/bookings'),
-            headers: _authHeaders(json: true),
-            body: jsonEncode({
-              'time': time.trim(),
-              'customerName': customerName.trim(),
-              'serviceName': serviceName.trim(),
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
-    } on SocketException catch (e) {
-      throw Exception('Không kết nối được máy chủ để lưu lịch hẹn: $e');
-    }
-
-    if (response.statusCode != 200) {
-      throw Exception('Lưu lịch hẹn thất bại (HTTP ${response.statusCode}).');
-    }
-
+    await apiClient.post(
+      '/bookings',
+      {
+        'time': time.trim(),
+        'customerName': customerName.trim(),
+        'serviceName': serviceName.trim(),
+      },
+      timeout: const Duration(seconds: 15),
+    );
     return <String, String>{
       'time': time.trim(),
       'customer': customerName.trim(),
@@ -387,12 +184,12 @@ class InboxService {
       tag = 'CA KHÓ / SỬA MÀY';
       tagType = 'urgent';
       aiSuggestion =
-          'Dạ bên em chuyên xử lý nền mày trổ xanh/đỏ bằng Laser kết hợp đi sợi Hairstroke tự nhiên. Chị gửi em xin ảnh cận chân mày hiện tại để Master lên phác đồ cho mình nhé!';
+          'Dạ bên em chuyên xử lý nền mày trổ xanh/đỏ bằng Laser kết hợp đi sợi Hairstroke tự nhiên. Chị gửi em xin ảnh cận chân mày hiện tại để chuyên gia lên phác đồ cho mình nhé!';
     } else if (imageUrl.isNotEmpty) {
       tag = 'KHÁCH GỬI ẢNH';
       tagType = 'image';
       aiSuggestion =
-          'Dạ em đã nhận được ảnh của chị rồi ạ! Với nền hiện tại mình làm Mày sợi Hairstroke hoặc Môi Collagen sẽ rất tự nhiên, em gửi chị xem thử mẫu ghép AI nhé?';
+          'Dạ em đã nhận được ảnh của chị rồi ạ! Với nền hiện tại mình làm Mày sợi Hairstroke hoặc Môi Collagen sẽ rất tự nhiên, em gửi chị xem thử mẫu mô phỏng AI nhé?';
     } else if (lower.contains('giá') ||
         lower.contains('lịch') ||
         lower.contains('môi') ||

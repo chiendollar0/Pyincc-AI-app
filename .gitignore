@@ -6,6 +6,8 @@ pyincc.local.json
 *.keystore
 *.b64
 key.properties
+ios/Flutter/Local.xcconfig
+mobile_app/ios/Flutter/Local.xcconfig
 
 # Flutter / Dart
 mobile_app/.dart_tool/

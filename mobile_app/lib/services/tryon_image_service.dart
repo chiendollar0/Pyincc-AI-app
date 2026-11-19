@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import 'api_client.dart';
+
 class TryOnImageService {
   final String apiBaseUrl;
   final String authToken;
@@ -16,6 +18,11 @@ class TryOnImageService {
     ),
   });
 
+  ApiClient get _api => ApiClient(
+        baseUrl: apiBaseUrl,
+        authToken: authToken,
+      );
+
   Map<String, String> _jsonHeaders() {
     final headers = <String, String>{'Content-Type': 'application/json'};
     final token = authToken.trim();
@@ -23,52 +30,6 @@ class TryOnImageService {
       headers['Authorization'] = 'Bearer $token';
     }
     return headers;
-  }
-
-  Uri _endpoint(String path) {
-    final base = apiBaseUrl.trim();
-    if (base.isEmpty) {
-      throw Exception('Chưa cấu hình endpoint thử ảnh (TRYON_API_URL).');
-    }
-
-    return Uri.parse('${base.replaceFirst(RegExp(r'/+$'), '')}$path');
-  }
-
-  Future<Map<String, dynamic>> _postJson({
-    required String path,
-    required Map<String, dynamic> body,
-    required Duration timeout,
-  }) async {
-    late final http.Response response;
-    try {
-      response = await http
-          .post(
-            _endpoint(path),
-            headers: _jsonHeaders(),
-            body: jsonEncode(body),
-          )
-          .timeout(timeout);
-    } on SocketException catch (e) {
-      throw Exception('Không kết nối được backend thử ảnh: $e');
-    }
-
-    if (response.statusCode == 501) {
-      throw Exception(
-        'Tính năng ghép ảnh AI đang chờ kích hoạt model trên máy chủ (HTTP 501).',
-      );
-    }
-
-    if (response.statusCode != 200) {
-      var detail = response.body;
-      if (detail.length > 300) detail = '${detail.substring(0, 300)}...';
-      throw Exception('Backend lỗi HTTP ${response.statusCode}: $detail');
-    }
-
-    final decoded = jsonDecode(response.body);
-    if (decoded is! Map<String, dynamic>) {
-      throw Exception('Backend trả về JSON không đúng cấu trúc object.');
-    }
-    return decoded;
   }
 
   Future<Map<String, dynamic>> analyzeFace({
@@ -81,31 +42,35 @@ class TryOnImageService {
 
     final bytes = await image.readAsBytes();
     if (bytes.isEmpty) {
-      throw Exception('Ảnh mặt khách rỗng hoặc không đọc được.');
+      throw const ApiException(0, 'Ảnh mặt khách rỗng hoặc không đọc được.');
     }
 
-    final response = await http.post(
-      url,
-      headers: _jsonHeaders(),
-      body: jsonEncode({
-        'image_base64': base64Encode(bytes),
-        'catalog': catalog,
-      }),
-    );
+    late final http.Response response;
+    try {
+      response = await http
+          .post(
+            url,
+            headers: _jsonHeaders(),
+            body: jsonEncode({
+              'image_base64': base64Encode(bytes),
+              'catalog': catalog,
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
+    } on SocketException {
+      throw const SocketException('analyze_network_unreachable');
+    }
 
     if (response.statusCode != 200) {
-      throw Exception('Backend lỗi HTTP ${response.statusCode}: ${response.body}');
+      throw ApiException(response.statusCode, 'Chưa thể phân tích khuôn mặt.');
     }
 
     final decoded = jsonDecode(response.body);
-    if (decoded is! Map<String, dynamic>) {
-      throw Exception('Backend trả về JSON không đúng cấu trúc object.');
-    }
-    if (decoded['analysis'] == null) {
-      throw Exception('Backend không trả về analysis: ${response.body}');
+    if (decoded is! Map<String, dynamic> || decoded['analysis'] is! Map) {
+      throw const ApiException(0, 'Dữ liệu phân tích không đúng định dạng.');
     }
 
-    return decoded['analysis'] as Map<String, dynamic>;
+    return Map<String, dynamic>.from(decoded['analysis'] as Map);
   }
 
   Future<Uint8List> generatePreview({
@@ -115,12 +80,12 @@ class TryOnImageService {
   }) async {
     final bytes = await image.readAsBytes();
     if (bytes.isEmpty) {
-      throw Exception('Ảnh mặt khách rỗng hoặc không đọc được.');
+      throw const ApiException(0, 'Ảnh mặt khách rỗng hoặc không đọc được.');
     }
 
-    final data = await _postJson(
-      path: '/api/tryon/generate',
-      body: {
+    final data = await _api.post(
+      '/api/tryon/generate',
+      {
         'image_base64': base64Encode(bytes),
         'category': category,
         'prompt': prompt,
@@ -130,13 +95,13 @@ class TryOnImageService {
 
     final result = data['result_base64'];
     if (result is! String || result.isEmpty) {
-      throw Exception('Backend không trả về ảnh.');
+      throw const ApiException(0, 'Chưa nhận được ảnh mô phỏng từ máy chủ.');
     }
 
     try {
       return base64Decode(result);
-    } on FormatException catch (e) {
-      throw Exception('Ảnh backend trả về không hợp lệ: $e');
+    } on FormatException {
+      throw const ApiException(0, 'Ảnh mô phỏng trả về không hợp lệ.');
     }
   }
 
@@ -146,13 +111,12 @@ class TryOnImageService {
     required String caption,
   }) async {
     if (imageBytes.isEmpty) {
-      throw Exception('Chưa có ảnh ghép AI để gửi.');
+      throw const ApiException(0, 'Chưa có ảnh mô phỏng AI để gửi.');
     }
 
-    // Step 1: Upload & record approved_by / approved_at in customer_media table
-    final draftRes = await _postJson(
-      path: '/tryon-drafts',
-      body: {
+    final draftRes = await _api.post(
+      '/tryon-drafts',
+      {
         'recipientId': recipientId.trim(),
         'imageBase64': base64Encode(imageBytes),
         'caption': caption.trim(),
@@ -164,15 +128,12 @@ class TryOnImageService {
     final mediaRecordId =
         media is Map<String, dynamic> ? (media['id'] ?? '').toString() : '';
     if (mediaRecordId.isEmpty) {
-      throw Exception('Không tạo được bản ghi duyệt ảnh trên cơ sở dữ liệu.');
+      throw const ApiException(0, 'Chưa lưu được bản ghi duyệt ảnh.');
     }
 
-    // Step 2: Server verifies database approval state and sends signed URL to Messenger
-    return _postJson(
-      path: '/send-tryon-image',
-      body: {
-        'mediaRecordId': mediaRecordId,
-      },
+    return _api.post(
+      '/send-tryon-image',
+      {'mediaRecordId': mediaRecordId},
       timeout: const Duration(seconds: 30),
     );
   }

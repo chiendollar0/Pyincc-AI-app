@@ -235,14 +235,26 @@ app.post('/auth/facebook/exchange-token', requireAuth, requireRole('owner'), exp
   try {
     const verified = await verifyFacebookUserToken(userAccessToken.trim());
     const pages = await exchangeUserTokenAndSavePages(userAccessToken.trim(), req.orgId, verified.userId);
-    return res.json({ success: true, org_id: req.orgId, role: req.userRole,
-      pages: pages.map((p) => ({ page_id: p.page_id, page_name: p.page_name })) });
+    return res.json({
+      success: true,
+      org_id: req.orgId,
+      role: req.userRole,
+      pages: pages.map((p) => ({
+        id: p.page_id,
+        name: p.page_name,
+        page_id: p.page_id,
+        page_name: p.page_name,
+      })),
+    });
   } catch (error) {
     if (error.code === 'PAGE_ALREADY_BOUND_TO_ANOTHER_ORG') {
       return res.status(409).json({ error: 'PAGE_ALREADY_BOUND_TO_ANOTHER_ORG' });
     }
+    if (error.code === 'INVALID_FACEBOOK_TOKEN') {
+      return res.status(401).json({ error: 'INVALID_FACEBOOK_TOKEN', message: 'Token Facebook không hợp lệ hoặc đã hết hạn.' });
+    }
     console.error(JSON.stringify({ event: 'exchange_token_failed', message: error.message }));
-    return res.status(401).json({ error: 'Unauthorized' });
+    return res.status(502).json({ error: 'META_UPSTREAM_ERROR' });
   }
 }));
 
@@ -262,12 +274,25 @@ app.get('/connected-pages', requireAuth, requireRole('owner', 'staff'), asyncHan
 }));
 
 async function verifyFacebookUserToken(inputToken) {
-  const response = await axios.get(`https://graph.facebook.com/${config.graphApiVersion}/debug_token`, {
-    params: { input_token: inputToken, access_token: `${config.metaAppId}|${config.metaAppSecret}` }, timeout: 15000,
-  });
+  let response;
+  try {
+    response = await axios.get(`https://graph.facebook.com/${config.graphApiVersion}/debug_token`, {
+      params: { input_token: inputToken, access_token: `${config.metaAppId}|${config.metaAppSecret}` }, timeout: 15000,
+    });
+  } catch (error) {
+    const status = error.response?.status;
+    if (status === 400 || status === 401 || status === 403) {
+      const invalidErr = new Error('Facebook token rejected by debug_token');
+      invalidErr.code = 'INVALID_FACEBOOK_TOKEN';
+      throw invalidErr;
+    }
+    throw error;
+  }
   const tokenData = response.data?.data;
   if (!tokenData || tokenData.is_valid !== true || String(tokenData.app_id) !== String(config.metaAppId) || !tokenData.user_id) {
-    throw new Error('Facebook token failed debug_token validation');
+    const invalidErr = new Error('Facebook token failed debug_token validation');
+    invalidErr.code = 'INVALID_FACEBOOK_TOKEN';
+    throw invalidErr;
   }
   return { userId: String(tokenData.user_id), appId: String(tokenData.app_id) };
 }

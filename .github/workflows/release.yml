@@ -67,6 +67,9 @@ jobs:
 
       - name: Build Release APK (Only Public Dart-Defines)
         working-directory: ./mobile_app
+        env:
+          FB_CLIENT_TOKEN: ${{ secrets.FB_CLIENT_TOKEN }}
+          ORG_GRADLE_PROJECT_FB_CLIENT_TOKEN: ${{ secrets.FB_CLIENT_TOKEN }}
         run: |
           flutter build apk --release \
             --dart-define=APP_ENV=production \

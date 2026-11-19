@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../core/errors/user_message.dart';
+
 class AuthSession {
   final String accessToken;
   final String email;
@@ -33,11 +35,11 @@ class AuthService {
   }) async {
     final cleanEmail = email.trim();
     if (cleanEmail.isEmpty || password.isEmpty) {
-      throw Exception('Vui lòng nhập đầy đủ Email và Mật khẩu.');
+      throw const AuthFailure('Vui lòng nhập đầy đủ Email và Mật khẩu.');
     }
     if (supabaseAnonKey.trim().isEmpty) {
-      throw Exception(
-        'Chưa cấu hình SUPABASE_ANON_KEY khi khởi chạy ứng dụng.',
+      throw const AuthFailure(
+        'Ứng dụng chưa được cấu hình đầy đủ để đăng nhập.',
       );
     }
 
@@ -56,24 +58,27 @@ class AuthService {
             }),
           )
           .timeout(const Duration(seconds: 15));
-    } on SocketException catch (e) {
-      throw Exception('Không kết nối được máy chủ xác thực: $e');
+    } on SocketException {
+      throw const SocketException('auth_network_unreachable');
     }
 
+    if (response.statusCode == 400 || response.statusCode == 401) {
+      throw const AuthFailure('Email hoặc mật khẩu chưa đúng.');
+    }
     if (response.statusCode != 200) {
-      throw Exception(
-        'Đăng nhập không thành công (HTTP ${response.statusCode}). Vui lòng kiểm tra lại Email hoặc Mật khẩu.',
+      throw const AuthFailure(
+        'Hệ thống xác thực tạm thời gián đoạn. Vui lòng thử lại sau.',
       );
     }
 
     final decoded = jsonDecode(response.body);
     if (decoded is! Map<String, dynamic>) {
-      throw Exception('Phản hồi xác thực không hợp lệ.');
+      throw const AuthFailure('Không thể đọc dữ liệu phiên đăng nhập.');
     }
 
     final accessToken = (decoded['access_token'] ?? '').toString().trim();
     if (accessToken.isEmpty) {
-      throw Exception('Không nhận được access_token từ Supabase Auth.');
+      throw const AuthFailure('Không nhận được phiên đăng nhập hợp lệ.');
     }
 
     final userObj = decoded['user'];
@@ -100,7 +105,7 @@ class AuthService {
           )
           .timeout(const Duration(seconds: 10));
     } catch (_) {
-      // Clear local session regardless of network status
+      // Luôn dọn phiên cục bộ dù không có mạng
     }
   }
 }

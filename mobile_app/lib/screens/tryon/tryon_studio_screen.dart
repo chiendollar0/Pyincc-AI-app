@@ -6,6 +6,8 @@ import 'package:before_after/before_after.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/errors/user_message.dart';
+import '../../core/theme/app_theme.dart';
 import '../../services/tryon_image_service.dart';
 
 class TryOnStudioScreen extends StatefulWidget {
@@ -13,6 +15,7 @@ class TryOnStudioScreen extends StatefulWidget {
   final String authToken;
   final String? customerPsid;
   final String? customerName;
+  final VoidCallback? onSignOut;
 
   const TryOnStudioScreen({
     super.key,
@@ -20,6 +23,7 @@ class TryOnStudioScreen extends StatefulWidget {
     this.authToken = '',
     this.customerPsid,
     this.customerName,
+    this.onSignOut,
   });
 
   @override
@@ -84,13 +88,27 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     return null;
   }
 
+  bool _isUnrecognizedFace(Map<String, dynamic> analysis) {
+    if (analysis['face_detected'] == false) return true;
+    final faceShape = (analysis['face_shape'] ?? '').toString().toLowerCase();
+    final skinTone = (analysis['skin_tone'] ?? '').toString().toLowerCase();
+    return faceShape.contains('không thể xác định') ||
+        faceShape.contains('không xác định') ||
+        skinTone.contains('không thể xác định') ||
+        skinTone.contains('không xác định');
+  }
+
   Future<void> _pickImage(ImageSource source) async {
     XFile? picked;
     try {
       picked = await _picker.pickImage(source: source, imageQuality: 85);
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
-      setState(() => _note = 'Không mở được thư viện/camera: $e');
+      showAppMessage(
+        context,
+        'Không mở được thư viện ảnh hoặc máy ảnh. Vui lòng kiểm tra quyền truy cập.',
+        isError: true,
+      );
       return;
     }
 
@@ -116,24 +134,39 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
 
       if (!mounted) return;
 
+      if (_isUnrecognizedFace(analysis)) {
+        setState(() {
+          _faceSummary = 'Chưa nhận diện được khuôn mặt';
+          _note =
+              'Chưa nhận diện được khuôn mặt. Vui lòng chụp lại ảnh rõ mặt, nhìn thẳng vào camera.';
+        });
+        return;
+      }
+
       final suggestedId = analysis['recommended_item_id']?.toString();
       final validIds = _catalog.map((e) => e['id']).toSet();
       if (suggestedId != null && validIds.contains(suggestedId)) {
         _selectedId = suggestedId;
       }
 
+      final faceShape = (analysis['face_shape'] ?? 'Cân đối').toString().trim();
+      final skinTone = (analysis['skin_tone'] ?? 'Tự nhiên').toString().trim();
+      final script = (analysis['consultation_script'] ?? '').toString().trim();
+
       setState(() {
-        _faceSummary =
-            'Mặt: ${analysis['face_shape'] ?? 'Cân đối'} • Da: ${analysis['skin_tone'] ?? 'Tự nhiên'}';
-        _note =
-            '${analysis['consultation_script'] ?? 'Đã chọn mẫu phù hợp nhất trong danh mục.'}';
+        _faceSummary = 'Mặt: $faceShape • Da: $skinTone';
+        _note = script.isNotEmpty
+            ? script
+            : 'Đã gợi ý mẫu phù hợp nhất trong danh mục của tiệm.';
       });
-    } catch (e) {
+    } catch (error) {
       if (!mounted) return;
+      final friendly = userMessage(error);
       setState(() {
         _faceSummary = 'Đã tải ảnh khách';
-        _note = 'Chưa phân tích tự động ($e). Bạn vẫn có thể chọn mẫu bên dưới để ghép thử.';
+        _note = '$friendly Bạn vẫn có thể chọn mẫu bên dưới.';
       });
+      showAppMessage(context, friendly, isError: true);
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -157,11 +190,9 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
       );
       if (!mounted) return;
       setState(() => _aiResultBytes = bytes);
-    } catch (e) {
+    } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$e')),
-      );
+      showAppMessage(context, userMessage(error), isError: true);
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -177,7 +208,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     );
     final captionCtrl = TextEditingController(
       text:
-          'Dạ em gửi chị xem trước ảnh ghép mẫu ${item['name']} (${item['price']}) bên em nhé ạ!',
+          'Dạ em gửi chị xem trước ảnh mô phỏng mẫu ${item['name']} (${item['price']}) bên em nhé ạ!',
     );
 
     final confirmed = await showDialog<bool>(
@@ -195,8 +226,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
               TextField(
                 controller: psidCtrl,
                 decoration: const InputDecoration(
-                  labelText: 'Mã khách hàng (PSID / trống nếu chỉ lưu hồ sơ)',
-                  border: OutlineInputBorder(),
+                  labelText: 'Mã khách hàng (để trống nếu chỉ lưu hồ sơ)',
                 ),
               ),
               const SizedBox(height: 10),
@@ -205,7 +235,6 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
                 maxLines: 3,
                 decoration: const InputDecoration(
                   labelText: 'Lời nhắn gửi kèm ảnh',
-                  border: OutlineInputBorder(),
                 ),
               ),
             ],
@@ -240,20 +269,15 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
       );
       if (!mounted) return;
       final delivered = result['deliveredToMessenger'] == true;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            delivered
-                ? 'Đã tải ảnh lên Supabase và gửi qua Messenger cho khách!'
-                : 'Đã lưu ảnh demo lên máy chủ thành công!',
-          ),
-        ),
+      showAppMessage(
+        context,
+        delivered
+            ? 'Đã lưu ảnh và gửi qua Messenger cho khách thành công.'
+            : 'Đã lưu ảnh mô phỏng vào hồ sơ khách hàng thành công.',
       );
-    } catch (e) {
+    } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Lỗi gửi ảnh: $e')),
-      );
+      showAppMessage(context, userMessage(error), isError: true);
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -264,35 +288,47 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     final selectedItem = _selectedItem;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Studio AI • Thử Mày & Môi'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.photo_library_outlined),
-            tooltip: 'Chọn ảnh từ thư viện',
-            onPressed: _isBusy ? null : () => _pickImage(ImageSource.gallery),
-          ),
-          IconButton(
-            icon: const Icon(Icons.camera_alt_outlined),
-            tooltip: 'Chụp ảnh khách',
-            onPressed: _isBusy ? null : () => _pickImage(ImageSource.camera),
-          ),
-        ],
-      ),
       body: SafeArea(
         child: Column(
           children: [
+            BrandHeader(
+              subtitle: 'Studio AI',
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.photo_library_outlined),
+                    tooltip: 'Chọn ảnh từ thư viện',
+                    onPressed:
+                        _isBusy ? null : () => _pickImage(ImageSource.gallery),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.camera_alt_outlined),
+                    tooltip: 'Chụp ảnh khách',
+                    onPressed:
+                        _isBusy ? null : () => _pickImage(ImageSource.camera),
+                  ),
+                  if (widget.onSignOut != null)
+                    IconButton(
+                      onPressed: widget.onSignOut,
+                      icon: const Icon(Icons.logout),
+                      tooltip: 'Đăng xuất',
+                    ),
+                ],
+              ),
+            ),
             if (_isBusy) const LinearProgressIndicator(),
-            // 1. Khung ảnh Trước / Sau ổn định
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                 child: Container(
                   width: double.infinity,
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.grey.shade300),
+                    border: Border.all(
+                      color: AppColors.primary.withValues(alpha: 0.14),
+                    ),
                   ),
                   child: _originalImage == null
                       ? Column(
@@ -301,31 +337,34 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
                             Icon(
                               Icons.face_retouching_natural,
                               size: 56,
-                              color: Colors.pink.shade300,
+                              color: AppColors.primary.withValues(alpha: 0.5),
                             ),
                             const SizedBox(height: 12),
                             const Text(
                               'Chưa có ảnh mặt mộc của khách',
                               style: TextStyle(
-                                fontWeight: FontWeight.bold,
+                                fontWeight: FontWeight.w700,
                                 fontSize: 15,
+                                color: AppColors.textPrimary,
                               ),
                             ),
                             const SizedBox(height: 6),
                             const Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 32),
+                              padding: EdgeInsets.symmetric(horizontal: 28),
                               child: Text(
-                                'Chọn ảnh từ thư viện hoặc chụp trực tiếp để xem so sánh Trước & Sau khi làm mày/môi.',
+                                'Chọn ảnh từ thư viện hoặc chụp trực tiếp để phân tích dáng mặt và mô phỏng mẫu mày/môi.',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: Colors.black54,
+                                  color: AppColors.textMuted,
                                 ),
                               ),
                             ),
                             const SizedBox(height: 16),
                             Wrap(
                               spacing: 10,
+                              runSpacing: 8,
+                              alignment: WrapAlignment.center,
                               children: [
                                 FilledButton.icon(
                                   onPressed: () =>
@@ -394,15 +433,16 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
                 ),
               ),
             ),
-
-            // 2. Thẻ tóm tắt tư vấn AI
             Container(
               width: double.infinity,
-              margin: const EdgeInsets.symmetric(horizontal: 12),
-              padding: const EdgeInsets.all(10),
+              margin: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.pink.shade50,
-                borderRadius: BorderRadius.circular(12),
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.14),
+                ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -412,7 +452,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
                       const Icon(
                         Icons.auto_awesome,
                         size: 16,
-                        color: Colors.pink,
+                        color: AppColors.primary,
                       ),
                       const SizedBox(width: 6),
                       Expanded(
@@ -421,16 +461,17 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 12,
-                            color: Colors.pink,
+                            color: AppColors.primaryDark,
                           ),
                         ),
                       ),
                       if (selectedItem != null)
                         Text(
-                          'Giá: ${selectedItem['price']}',
+                          'Giá niêm yết: ${selectedItem['price']}',
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 12,
+                            color: AppColors.textPrimary,
                           ),
                         ),
                     ],
@@ -438,18 +479,19 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
                   const SizedBox(height: 4),
                   Text(
                     _note,
-                    maxLines: 2,
+                    maxLines: 3,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textPrimary,
+                    ),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 8),
-
-            // 3. Bộ lọc nhóm dịch vụ + Danh sách mẫu
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
                 children: [
                   ChoiceChip(
@@ -478,7 +520,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
               height: 44,
               child: ListView.builder(
                 scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 itemCount: _filteredCatalog.length,
                 itemBuilder: (context, index) {
                   final item = _filteredCatalog[index];
@@ -499,10 +541,8 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
                 },
               ),
             ),
-
-            // 4. Thanh thao tác cố định
             Padding(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
               child: Row(
                 children: [
                   Expanded(

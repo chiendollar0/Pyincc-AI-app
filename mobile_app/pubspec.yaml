@@ -14,6 +14,7 @@ dependencies:
   http: ^1.2.2
   image: ^4.2.0
   flutter_facebook_auth: ^7.1.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -23,3 +24,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets_icon_1024.png
+    - assets/brand/
