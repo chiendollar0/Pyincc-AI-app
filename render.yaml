@@ -2,11 +2,14 @@ services:
   - type: web
     name: pyincc-meta-webhook
     runtime: node
+    # Switch to "starter" for always-on production (avoids ~50s cold-start latency on Meta webhooks).
     plan: free
     rootDir: backend_bridge/meta-webhook
+    # Switch to "npm ci" once backend_bridge/meta-webhook/package-lock.json is committed.
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
+    autoDeploy: false
     envVars:
       - key: NODE_ENV
         value: production
@@ -14,27 +17,19 @@ services:
         value: https://pyincccrm.bothelper.vn
       - key: SUPABASE_URL
         value: https://ihufvqrxdswgbagzhydb.supabase.co
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
       - key: SUPABASE_STORAGE_BUCKET
         value: customer-media
       - key: META_APP_ID
+        value: "1555273769742937"
+      - key: META_GRAPH_API_VERSION
+        value: v19.0
+      - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: META_APP_SECRET
         sync: false
-      - key: META_GRAPH_API_VERSION
-        value: v19.0
+      - key: BOOTSTRAP_OWNER_EMAIL
+        sync: false
       - key: VERIFY_TOKEN
         generateValue: true
       - key: PAGE_TOKEN_ENC_KEY
         generateValue: true
-      - key: API_KEY
-        generateValue: true
-      - key: BOOTSTRAP_OWNER_EMAIL
-        value: ""
-      - key: DEFAULT_ORG_ID
-        value: ""
-      - key: PAGE_ID
-        value: ""
-      - key: PAGE_ACCESS_TOKEN
-        sync: false

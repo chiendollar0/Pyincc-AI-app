@@ -15,6 +15,20 @@ void main() {
       expect(find.text('Mật khẩu'), findsOneWidget);
       expect(find.text('Đăng nhập'), findsOneWidget);
 
+      // Verify password field starts obscured and toggles visibility on eye tap
+      final passwordFieldFinder = find.widgetWithText(TextField, 'Mật khẩu');
+      expect(tester.widget<TextField>(passwordFieldFinder).obscureText, isTrue);
+      expect(find.byIcon(Icons.visibility_outlined), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.visibility_outlined));
+      await tester.pump();
+      expect(tester.widget<TextField>(passwordFieldFinder).obscureText, isFalse);
+      expect(find.byIcon(Icons.visibility_off_outlined), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.visibility_off_outlined));
+      await tester.pump();
+      expect(tester.widget<TextField>(passwordFieldFinder).obscureText, isTrue);
+
       // Submit empty credentials -> friendly Vietnamese message without raw technical text
       await tester.tap(find.text('Đăng nhập'));
       await tester.pump(const Duration(milliseconds: 200));

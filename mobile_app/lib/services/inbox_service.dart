@@ -206,6 +206,7 @@ class InboxService {
     return {
       'id': (row['id'] ?? row['message_id'] ?? psid).toString(),
       'psid': psid,
+      'pageId': (row['page_id'] ?? '').toString().trim(),
       'name': 'Khách $channel ($shortPsid)',
       'tag': isFromCustomer ? tag : 'ĐÃ PHẢN HỒI',
       'tagType': isFromCustomer ? tagType : 'replied',

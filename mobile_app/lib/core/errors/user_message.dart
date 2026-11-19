@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 import 'api_exception.dart';
+import 'image_prepare_exception.dart';
 
 class AuthFailure implements Exception {
   final String message;
@@ -18,17 +19,23 @@ class AuthFailure implements Exception {
 
 String userMessage(Object error) {
   if (error is AuthFailure) return error.message;
-  if (error is FormatException) return error.message;
+  if (error is ImagePrepareException) return error.message;
   if (error is ApiException) {
     if (error.status == 0) return error.message;
     switch (error.status) {
       case 401:
         return 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.';
       case 403:
+        if (error.message.contains('SELF_APPROVAL_NOT_ALLOWED')) {
+          return 'Nhân viên không thể tự duyệt ảnh do mình tạo. Vui lòng nhờ Chủ tiệm hoặc nhân viên khác duyệt.';
+        }
         return 'Tài khoản của bạn chưa có quyền thực hiện thao tác này.';
       case 404:
         return 'Không tìm thấy dữ liệu. Có thể đã bị xoá.';
       case 409:
+        if (error.message.contains('INVITATION_ALREADY_EXISTS')) {
+          return 'Lời mời cho nhân viên này đang chờ xác nhận.';
+        }
         return 'Thao tác này đang được xử lý hoặc đã hoàn tất.';
       case 413:
         return 'Ảnh quá lớn. Vui lòng chọn ảnh nhỏ hơn.';
@@ -37,6 +44,10 @@ String userMessage(Object error) {
       case 422:
         if (error.message.contains('OUTSIDE_24H_WINDOW')) {
           return 'Đã quá khung 24 giờ kể từ tin nhắn cuối của khách. Cần chờ khách nhắn lại.';
+        }
+        if (error.message.contains('MISSING_PAGE_CONTEXT') ||
+            error.message.contains('PAGE_MISMATCH')) {
+          return 'Thiếu thông tin Fanpage của hội thoại này. Vui lòng mở lại từ tin nhắn khách.';
         }
         return 'Chưa có Fanpage hoặc mã khách để gửi. Vui lòng kiểm tra lại.';
       case 429:

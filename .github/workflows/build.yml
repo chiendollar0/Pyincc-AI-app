@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -28,7 +31,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: mobile_app
-        run: flutter pub get --enforce-lockfile
+        run: flutter pub get
 
       - name: Analyze
         working-directory: mobile_app
@@ -42,11 +45,25 @@ jobs:
         working-directory: mobile_app
         env:
           ORG_GRADLE_PROJECT_FB_CLIENT_TOKEN: ${{ secrets.FB_CLIENT_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          TRYON_API_URL: ${{ secrets.TRYON_API_URL }}
         run: |
+          missing=""
+          for var_name in ORG_GRADLE_PROJECT_FB_CLIENT_TOKEN SUPABASE_URL SUPABASE_ANON_KEY TRYON_API_URL; do
+            if [ -z "${!var_name}" ]; then
+              missing="$missing $var_name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required GitHub Secrets:$missing"
+            exit 1
+          fi
+
           flutter build apk --debug \
-            --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }} \
-            --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }} \
-            --dart-define=TRYON_API_URL=${{ secrets.TRYON_API_URL }}
+            "--dart-define=SUPABASE_URL=$SUPABASE_URL" \
+            "--dart-define=SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY" \
+            "--dart-define=TRYON_API_URL=$TRYON_API_URL"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

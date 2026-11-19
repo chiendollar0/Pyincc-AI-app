@@ -1,10 +1,12 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.disable('x-powered-by');
+app.set('trust proxy', 1);
 const port = Number(process.env.PORT) || 3000;
 const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -16,13 +18,26 @@ const config = {
   pageTokenEncKey: process.env.PAGE_TOKEN_ENC_KEY || '',
   apiKey: process.env.API_KEY,
   bootstrapOwnerEmail: (process.env.BOOTSTRAP_OWNER_EMAIL || '').trim().toLowerCase(),
-  defaultOrgId: process.env.DEFAULT_ORG_ID || null,
-  pageId: process.env.PAGE_ID || null,
-  pageAccessToken: process.env.PAGE_ACCESS_TOKEN || null,
   graphApiVersion: process.env.META_GRAPH_API_VERSION || 'v21.0',
   storageBucket: process.env.SUPABASE_STORAGE_BUCKET || 'customer-media',
   publicBaseUrl: process.env.PUBLIC_BASE_URL || 'https://pyincccrm.bothelper.vn',
 };
+
+const authWriteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'RATE_LIMITED' },
+});
+
+const writeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'RATE_LIMITED' },
+});
 
 const requiredConfig = [
   ['SUPABASE_URL', config.supabaseUrl],
@@ -221,7 +236,7 @@ app.get('/data-deletion', asyncHandler(async (req, res) => {
       .eq('code', safeCode)
       .maybeSingle();
     if (row) {
-      statusBanner = `<p style="padding:12px;background:#e8f5e9;border-radius:8px;color:#1b5e20;"><strong>Mã xác nhận ${row.code}:</strong> Trạng thái <code>${row.status}</code> (ghi nhận lúc ${row.created_at}). Toàn bộ liên kết Fanpage, token đã mã hóa và thông tin lời mời Facebook của tài khoản này đã được xóa.</p>`;
+      statusBanner = `<p style="padding:12px;background:#e8f5e9;border-radius:8px;color:#1b5e20;"><strong>Mã xác nhận ${row.code}:</strong> Trạng thái <code>${row.status}</code> (ghi nhận lúc ${row.created_at}). Toàn bộ liên kết Fanpage, token đã mã hóa và liên kết Facebook của tài khoản này đã được gỡ bỏ.</p>`;
     } else {
       statusBanner = `<p style="padding:12px;background:#fff3e0;border-radius:8px;color:#e65100;"><strong>Mã xác nhận ${safeCode}:</strong> Không tìm thấy yêu cầu tương ứng trong hệ thống.</p>`;
     }
@@ -232,7 +247,7 @@ app.get('/data-deletion', asyncHandler(async (req, res) => {
     '<h1>Hướng dẫn Xóa Dữ liệu Người dùng — PyinccCRM</h1>' +
     statusBanner +
     '<p>Để thu hồi quyền và xóa toàn bộ dữ liệu liên kết Fanpage:</p>' +
-    '<ol><li>Vào Cài đặt Facebook → Tiện ích tích hợp cho doanh nghiệp (Business Integrations) → chọn <strong>PyinccCRM</strong> → bấm <strong>Gỡ</strong>. Hệ thống sẽ tự động nhận tín hiệu thu hồi và xóa toàn bộ Page Token, liên kết Fanpage và thông tin thành viên Facebook.</li>' +
+    '<ol><li>Vào Cài đặt Facebook → Tiện ích tích hợp cho doanh nghiệp (Business Integrations) → chọn <strong>PyinccCRM</strong> → bấm <strong>Gỡ</strong>. Hệ thống sẽ tự động nhận tín hiệu thu hồi và xóa toàn bộ Page Token, liên kết Fanpage và gỡ liên kết Facebook khỏi tài khoản thành viên.</li>' +
     '<li>Hoặc gửi email yêu cầu xóa toàn bộ dữ liệu hội thoại về <strong>phanhungkg03@gmail.com</strong>, yêu cầu sẽ được xử lý trong vòng 48 giờ.</li></ol></body></html>'
   );
 }));
@@ -242,7 +257,7 @@ app.get('/internal/webhook-status', requireInternalApiKey, (_req, res) =>
   res.json({ ...webhookDiagnostics }));
 
 // Returns 501 Not Implemented until an image generation model is configured (Section 1 & Section 12)
-app.post('/api/tryon/generate', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
+app.post('/api/tryon/generate', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
   const imageBase64 = String(req.body?.image_base64 || req.body?.imageBase64 || '').trim();
   if (!imageBase64) return res.status(400).json({ error: 'image_base64 is required' });
   return res.status(501).json({
@@ -259,19 +274,48 @@ app.get('/memberships', requireAuth, requireRole('owner'), asyncHandler(async (r
   return res.json({ memberships: data || [] });
 }));
 
-app.post('/memberships/invite', requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
-  const invitedEmail = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : null;
-  const invitedFbUserId = typeof req.body?.fbUserId === 'string' ? req.body.fbUserId.trim() : null;
+app.post('/memberships/invite', authWriteLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+  const invitedEmail = typeof req.body?.email === 'string' && req.body.email.trim()
+    ? req.body.email.trim().toLowerCase()
+    : null;
+  const invitedFbUserId = typeof req.body?.fbUserId === 'string' && req.body.fbUserId.trim()
+    ? req.body.fbUserId.trim()
+    : null;
   if (!invitedEmail && !invitedFbUserId) return res.status(400).json({ error: 'email or fbUserId is required to invite staff' });
+
+  if (invitedEmail) {
+    const { data: dupEmail } = await supabase.from('memberships')
+      .select('id')
+      .eq('org_id', req.orgId)
+      .eq('invited_email', invitedEmail)
+      .eq('status', 'pending')
+      .maybeSingle();
+    if (dupEmail) return res.status(409).json({ error: 'INVITATION_ALREADY_EXISTS' });
+  }
+  if (invitedFbUserId) {
+    const { data: dupFb } = await supabase.from('memberships')
+      .select('id')
+      .eq('org_id', req.orgId)
+      .eq('invited_fb_user_id', invitedFbUserId)
+      .eq('status', 'pending')
+      .maybeSingle();
+    if (dupFb) return res.status(409).json({ error: 'INVITATION_ALREADY_EXISTS' });
+  }
+
   const { data, error } = await supabase.from('memberships').insert({
     org_id: req.orgId, invited_email: invitedEmail, invited_fb_user_id: invitedFbUserId,
     role: 'staff', status: 'pending',
   }).select('id, org_id, invited_email, invited_fb_user_id, role, status, created_at').single();
-  if (error) return res.status(500).json({ error: 'Failed to create staff invitation' });
+  if (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'INVITATION_ALREADY_EXISTS' });
+    }
+    return res.status(500).json({ error: 'Failed to create staff invitation' });
+  }
   return res.json({ success: true, invitation: data });
 }));
 
-app.post('/auth/facebook/exchange-token', requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+app.post('/auth/facebook/exchange-token', authWriteLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   if (!config.metaAppSecret || !config.metaAppId) return res.status(503).json({ error: 'Service Unavailable' });
   const userAccessToken = req.body?.accessToken || req.body?.userAccessToken || req.body?.user_access_token;
   if (typeof userAccessToken !== 'string' || !userAccessToken.trim()) return res.status(400).json({ error: 'accessToken is required' });
@@ -304,8 +348,11 @@ app.post('/auth/facebook/exchange-token', requireAuth, requireRole('owner'), exp
 async function purgeFacebookUserData(fbUserId) {
   const { error: pagesErr } = await supabase.from('connected_pages').delete().eq('connected_by_fb_user_id', fbUserId);
   if (pagesErr) throw new Error(`connected_pages_delete_failed: ${pagesErr.message}`);
-  const { error: memErr } = await supabase.from('memberships').delete().eq('invited_fb_user_id', fbUserId);
-  if (memErr) throw new Error(`memberships_delete_failed: ${memErr.message}`);
+  // Only unlink Facebook identity on memberships; never delete membership rows on Facebook app removal.
+  const { error: memErr } = await supabase.from('memberships')
+    .update({ invited_fb_user_id: null, updated_at: new Date().toISOString() })
+    .eq('invited_fb_user_id', fbUserId);
+  if (memErr) throw new Error(`memberships_unlink_failed: ${memErr.message}`);
 }
 
 app.post('/auth/facebook/deauthorize', express.urlencoded({ extended: false }), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
@@ -339,6 +386,7 @@ app.post('/auth/facebook/data-deletion', express.urlencoded({ extended: false })
   });
   if (reqErr) {
     console.error(JSON.stringify({ event: 'data_deletion_log_failed', message: reqErr.message }));
+    return res.status(500).json({ error: 'DATA_DELETION_LOG_FAILED' });
   }
   const statusUrl = `${config.publicBaseUrl.replace(/\/+$/, '')}/data-deletion?code=${confirmationCode}`;
   return res.json({ url: statusUrl, confirmation_code: confirmationCode });
@@ -440,16 +488,16 @@ async function exchangeUserTokenAndSavePages(userAccessToken, orgId, fbUserId) {
   return savedPages;
 }
 
-async function resolvePageCredentialsForOrg(orgId, requestedPageId) {
-  let query = supabase.from('connected_pages').select('page_id, page_access_token')
-    .eq('org_id', orgId).order('updated_at', { ascending: false }).limit(1);
-  if (requestedPageId) query = query.eq('page_id', requestedPageId);
-  const { data } = await query;
-  if (Array.isArray(data) && data.length && data[0].page_access_token) {
-    return { pageId: data[0].page_id, pageAccessToken: decryptPageToken(data[0].page_access_token) };
-  }
-  if (config.pageId && config.pageAccessToken && config.defaultOrgId && String(orgId) === String(config.defaultOrgId)) {
-    return { pageId: config.pageId, pageAccessToken: config.pageAccessToken };
+async function resolvePageCredentialsForOrg(orgId, requiredPageId) {
+  const cleanPageId = String(requiredPageId || '').trim();
+  if (!orgId || !cleanPageId) return null;
+  const { data } = await supabase.from('connected_pages')
+    .select('page_id, page_access_token')
+    .eq('org_id', orgId)
+    .eq('page_id', cleanPageId)
+    .maybeSingle();
+  if (data?.page_access_token) {
+    return { pageId: data.page_id, pageAccessToken: decryptPageToken(data.page_access_token) };
   }
   return null;
 }
@@ -462,7 +510,7 @@ app.get('/settings', requireAuth, requireRole('owner', 'staff'), asyncHandler(as
     consultationScript: data ? String(data.consultation_script || '') : '' });
 }));
 
-app.put('/settings', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '32kb' }), asyncHandler(async (req, res) => {
+app.put('/settings', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '32kb' }), asyncHandler(async (req, res) => {
   if (typeof req.body?.consultationScript === 'string' && req.userRole !== 'owner') return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   const onDuty = typeof req.body?.onDuty === 'boolean' ? req.body.onDuty : true;
   const payload = { key: `org:${req.orgId}`, org_id: req.orgId, on_duty: onDuty, updated_at: new Date().toISOString() };
@@ -497,7 +545,7 @@ function parseVietnamScheduledAt(timeSlot) {
   return new Date().toISOString();
 }
 
-app.post('/bookings', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+app.post('/bookings', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const customerName = String(req.body?.customerName || req.body?.customer_name || '').trim();
   const customerPhone = String(req.body?.customerPhone || req.body?.customer_phone || '').trim();
   const serviceName = String(req.body?.serviceName || req.body?.service_name || '').trim();
@@ -530,7 +578,7 @@ app.post('/bookings', requireAuth, requireRole('owner', 'staff'), express.json({
   return res.json({ success: true, booking: data });
 }));
 
-app.post('/messages/:id/approve', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+app.post('/messages/:id/approve', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const messageRowId = String(req.params.id || '').trim();
   const draftReply = String(req.body?.text || req.body?.draftReply || '').trim();
   if (!messageRowId || !draftReply) return res.status(400).json({ error: 'message id and text are required' });
@@ -560,9 +608,9 @@ function mapMetaSendError(error) {
   return { status: 502, body: { error: 'META_SEND_FAILED' } };
 }
 
-app.post('/send-message', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+app.post('/send-message', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const messageRecordId = String(req.body?.messageRecordId || req.body?.message_record_id || '').trim();
-  const requestedPageId = req.body?.pageId || req.body?.page_id;
+  const requestedPageId = String(req.body?.pageId || req.body?.page_id || '').trim();
   if (!messageRecordId) return res.status(400).json({ error: 'messageRecordId is required; approve the message first' });
 
   const { data: msg, error: fetchErr } = await supabase.from('conversation_messages')
@@ -575,8 +623,15 @@ app.post('/send-message', requireAuth, requireRole('owner', 'staff'), express.js
   if (msg.approval_status !== 'approved' || !msg.approved_by || !msg.approved_at || !msg.draft_reply) {
     return res.status(403).json({ error: 'NOT_APPROVED' });
   }
+  const msgPageId = String(msg.page_id || '').trim();
+  if (!msgPageId) {
+    return res.status(422).json({ error: 'MISSING_PAGE_CONTEXT' });
+  }
+  if (requestedPageId && requestedPageId !== msgPageId) {
+    return res.status(422).json({ error: 'PAGE_MISMATCH' });
+  }
 
-  const page = await resolvePageCredentialsForOrg(req.orgId, requestedPageId || msg.page_id);
+  const page = await resolvePageCredentialsForOrg(req.orgId, msgPageId);
   if (!page) return res.status(503).json({ error: 'Chưa có Fanpage nào được kết nối cho tiệm của bạn.' });
 
   // Atomic lock: claim row by setting approval_status = 'sending' only if still 'approved'
@@ -609,8 +664,9 @@ app.post('/send-message', requireAuth, requireRole('owner', 'staff'), express.js
   }
 }));
 
-app.post('/tryon-drafts', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
+app.post('/tryon-drafts', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
   const recipientId = String(req.body?.recipientId || req.body?.recipient_id || '').trim();
+  const pageId = String(req.body?.pageId || req.body?.page_id || '').trim();
   const imageBase64 = String(req.body?.imageBase64 || req.body?.image_base64 || '').trim();
   const caption = String(req.body?.caption || '').trim();
   if (!imageBase64) return res.status(400).json({ error: 'imageBase64 is required' });
@@ -624,16 +680,34 @@ app.post('/tryon-drafts', requireAuth, requireRole('owner', 'staff'), express.js
   const { data: media, error } = await supabase.from('customer_media').insert({ org_id: req.orgId,
     source_channel: 'mobile', source_message_id: storagePath, storage_url: null, storage_path: storagePath,
     file_name: storagePath, mime_type: 'image/jpeg', file_size: buffer.length,
-    recipient_psid: recipientId || null, caption: caption || null, approval_status: 'pending',
+    recipient_psid: recipientId || null, page_id: pageId || null, caption: caption || null,
+    created_by: req.authUser.id, approval_status: 'pending',
     approved_by: null, approved_at: null, uploaded_at: createdAt })
-    .select('id, org_id, storage_path, approval_status, approved_by, approved_at').single();
+    .select('id, org_id, storage_path, page_id, created_by, approval_status, approved_by, approved_at').single();
   if (error || !media) return res.status(500).json({ error: 'Failed to persist Try-On draft media record' });
   return res.json({ success: true, media });
 }));
 
-app.post('/tryon-drafts/:id/approve', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+app.post('/tryon-drafts/:id/approve', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const mediaRecordId = String(req.params.id || '').trim();
   if (!mediaRecordId) return res.status(400).json({ error: 'media id is required' });
+
+  const { data: existing, error: lookupErr } = await supabase.from('customer_media')
+    .select('id, created_by, approval_status')
+    .eq('id', mediaRecordId)
+    .eq('org_id', req.orgId)
+    .maybeSingle();
+  if (lookupErr || !existing) {
+    return res.status(404).json({ error: 'Pending Try-On draft not found in your organization' });
+  }
+  if (existing.approval_status !== 'pending') {
+    return res.status(409).json({ error: 'DRAFT_NOT_PENDING' });
+  }
+  // Prevent staff from approving their own draft; owners may self-approve for 1-person salons (documented in README).
+  if (req.userRole !== 'owner' && existing.created_by && String(existing.created_by) === String(req.authUser.id)) {
+    return res.status(403).json({ error: 'SELF_APPROVAL_NOT_ALLOWED' });
+  }
+
   const captionOverride = typeof req.body?.caption === 'string' ? req.body.caption.trim() : undefined;
   const approvedAt = new Date().toISOString();
   const updatePayload = {
@@ -642,22 +716,26 @@ app.post('/tryon-drafts/:id/approve', requireAuth, requireRole('owner', 'staff')
     approved_at: approvedAt,
   };
   if (captionOverride !== undefined) updatePayload.caption = captionOverride || null;
-  const { data: media, error } = await supabase.from('customer_media')
+  let updateQuery = supabase.from('customer_media')
     .update(updatePayload)
     .eq('id', mediaRecordId)
     .eq('org_id', req.orgId)
-    .eq('approval_status', 'pending')
-    .select('id, org_id, storage_path, recipient_psid, caption, approval_status, approved_by, approved_at')
+    .eq('approval_status', 'pending');
+  if (req.userRole !== 'owner') {
+    updateQuery = updateQuery.neq('created_by', req.authUser.id);
+  }
+  const { data: media, error } = await updateQuery
+    .select('id, org_id, storage_path, recipient_psid, page_id, caption, created_by, approval_status, approved_by, approved_at')
     .maybeSingle();
-  if (error || !media) return res.status(404).json({ error: 'Pending Try-On draft not found in your organization' });
+  if (error || !media) return res.status(409).json({ error: 'DRAFT_NOT_PENDING' });
   return res.json({ success: true, media });
 }));
 
-app.post('/send-tryon-image', requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+app.post('/send-tryon-image', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const mediaRecordId = String(req.body?.mediaRecordId || req.body?.media_record_id || '').trim();
   if (!mediaRecordId) return res.status(400).json({ error: 'mediaRecordId is required' });
   const { data: media, error } = await supabase.from('customer_media')
-    .select('id, org_id, storage_path, recipient_psid, caption, approval_status, approved_by, approved_at')
+    .select('id, org_id, storage_path, recipient_psid, page_id, caption, approval_status, approved_by, approved_at')
     .eq('id', mediaRecordId).eq('org_id', req.orgId).single();
   if (error || !media) return res.status(404).json({ error: 'Try-On media record not found in your organization' });
   if (media.approval_status === 'sending' || media.approval_status === 'sent') {
@@ -668,8 +746,21 @@ app.post('/send-tryon-image', requireAuth, requireRole('owner', 'staff'), expres
   }
 
   const recipientId = String(media.recipient_psid || '').trim();
-  const page = await resolvePageCredentialsForOrg(req.orgId, req.body?.pageId);
-  if (!recipientId || !page) {
+  if (!recipientId) {
+    return res.status(422).json({ error: 'NO_RECIPIENT_OR_PAGE' });
+  }
+  const storedPageId = String(media.page_id || '').trim();
+  const bodyPageId = String(req.body?.pageId || req.body?.page_id || '').trim();
+  if (storedPageId && bodyPageId && storedPageId !== bodyPageId) {
+    return res.status(422).json({ error: 'PAGE_MISMATCH' });
+  }
+  const targetPageId = storedPageId || bodyPageId;
+  if (!targetPageId) {
+    return res.status(422).json({ error: 'MISSING_PAGE_CONTEXT' });
+  }
+
+  const page = await resolvePageCredentialsForOrg(req.orgId, targetPageId);
+  if (!page) {
     return res.status(422).json({ error: 'NO_RECIPIENT_OR_PAGE' });
   }
 
@@ -682,8 +773,15 @@ app.post('/send-tryon-image', requireAuth, requireRole('owner', 'staff'), expres
     .maybeSingle();
   if (!claimed) return res.status(409).json({ error: 'ALREADY_SENT_OR_SENDING' });
 
+  const signedUrlTtlSeconds = 3600;
   try {
-    const signedUrl = await createSignedUrl(media.storage_path, 3600);
+    const signedUrl = await createSignedUrl(media.storage_path, signedUrlTtlSeconds);
+    console.info(JSON.stringify({
+      event: 'send_tryon_dispatch',
+      mediaId: media.id,
+      pageId: page.pageId,
+      signedUrlTtlSeconds,
+    }));
     await axios.post(`https://graph.facebook.com/${config.graphApiVersion}/${page.pageId}/messages`, {
       recipient: { id: recipientId }, messaging_type: 'RESPONSE',
       message: { attachment: { type: 'image', payload: { url: signedUrl, is_reusable: false } } },
@@ -695,7 +793,14 @@ app.post('/send-tryon-image', requireAuth, requireRole('owner', 'staff'), expres
     return res.json({ success: true, signedUrl, deliveredToMessenger: true });
   } catch (error) {
     await supabase.from('customer_media').update({ approval_status: 'approved' }).eq('id', media.id).eq('org_id', req.orgId);
-    console.error(JSON.stringify({ event: 'send_tryon_failed', status: error.response?.status, code: error.response?.data?.error?.code }));
+    console.error(JSON.stringify({
+      event: 'send_tryon_failed',
+      mediaId: media.id,
+      pageId: page.pageId,
+      signedUrlTtlSeconds,
+      status: error.response?.status,
+      code: error.response?.data?.error?.code,
+    }));
     const mapped = mapMetaSendError(error);
     return res.status(mapped.status).json(mapped.body);
   }
@@ -878,7 +983,7 @@ async function handleFacebookMessage(orgId, pageId, event, message) {
   }
 
   let uploaded = null;
-  if (!isEcho && imageUrl) uploaded = await uploadImageToSupabase(imageUrl, messageId || crypto.randomUUID());
+  if (!isEcho && imageUrl) uploaded = await uploadImageToSupabase(orgId, imageUrl, messageId || crypto.randomUUID());
   const { error } = await supabase.from('conversation_messages').upsert({
     org_id: orgId,
     page_id: pageId || null,
@@ -900,7 +1005,7 @@ async function handleFacebookMessage(orgId, pageId, event, message) {
 
   if (uploaded) {
     const { error: mediaError } = await supabase.from('customer_media').upsert({
-      org_id: orgId, source_channel: 'facebook', source_message_id: messageId,
+      org_id: orgId, page_id: pageId || null, source_channel: 'facebook', source_message_id: messageId,
       source_url: null, storage_url: null, storage_path: uploaded.path,
       file_name: uploaded.path, mime_type: uploaded.mimeType, file_size: uploaded.size,
       approval_status: 'pending', uploaded_at: new Date().toISOString(),
@@ -909,7 +1014,9 @@ async function handleFacebookMessage(orgId, pageId, event, message) {
   }
 }
 
-async function uploadImageToSupabase(remoteUrl, messageId) {
+async function uploadImageToSupabase(orgId, remoteUrl, messageId) {
+  const safeOrgId = String(orgId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safeOrgId) throw new Error('Organization ID is required for image upload');
   let parsedUrl;
   try { parsedUrl = new URL(remoteUrl); } catch { throw new Error('Invalid image URL'); }
   const allowed = parsedUrl.protocol === 'https:' &&
@@ -925,7 +1032,7 @@ async function uploadImageToSupabase(remoteUrl, messageId) {
   const buffer = Buffer.from(response.data);
   if (!buffer.length || buffer.length > 15 * 1024 * 1024) throw new Error('Image size is invalid');
   const safeId = crypto.createHash('sha256').update(String(messageId)).digest('hex');
-  const path = `facebook/${safeId}.${extensions[mimeType]}`;
+  const path = `facebook/${safeOrgId}/${safeId}.${extensions[mimeType]}`;
   const { error } = await uploadWithRetry(path, buffer, mimeType);
   if (error) throw new Error(`Supabase Storage upload failed: ${error.message}`);
   return { path, mimeType, size: buffer.length };
@@ -959,4 +1066,14 @@ app.use((err, _req, res, _next) => {
   return res.status(500).json({ error: 'SERVER_ERROR' });
 });
 
-app.listen(port, () => console.log(JSON.stringify({ event: 'server_started', service: 'pyincc-meta-webhook', port })));
+if (require.main === module) {
+  app.listen(port, () => console.log(JSON.stringify({ event: 'server_started', service: 'pyincc-meta-webhook', port })));
+}
+
+module.exports = {
+  app,
+  purgeFacebookUserData,
+  resolvePageCredentialsForOrg,
+  uploadImageToSupabase,
+  verifyFacebookSignedRequest,
+};

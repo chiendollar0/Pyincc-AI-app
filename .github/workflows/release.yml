@@ -6,6 +6,9 @@ on:
       - 'v*.*.*'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   release-apk:
     runs-on: ubuntu-latest
@@ -65,42 +68,35 @@ jobs:
         working-directory: ./mobile_app
         run: flutter test
 
-      - name: Build Release APK (Only Public Dart-Defines)
+      - name: Build Release APK
         working-directory: ./mobile_app
         env:
-          FB_CLIENT_TOKEN: ${{ secrets.FB_CLIENT_TOKEN }}
           ORG_GRADLE_PROJECT_FB_CLIENT_TOKEN: ${{ secrets.FB_CLIENT_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          TRYON_API_URL: ${{ secrets.TRYON_API_URL }}
         run: |
+          missing=""
+          for var_name in ORG_GRADLE_PROJECT_FB_CLIENT_TOKEN SUPABASE_URL SUPABASE_ANON_KEY TRYON_API_URL; do
+            if [ -z "${!var_name}" ]; then
+              missing="$missing $var_name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required GitHub Secrets:$missing"
+            exit 1
+          fi
+
           flutter build apk --release \
             --dart-define=APP_ENV=production \
-            --dart-define=SUPABASE_URL=${{ vars.PROD_SUPABASE_URL || vars.SUPABASE_URL || 'https://ihufvqrxdswgbagzhydb.supabase.co' }} \
-            --dart-define=SUPABASE_ANON_KEY=${{ vars.PROD_SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY }} \
-            --dart-define=TRYON_API_URL=${{ vars.PROD_API_URL || vars.TRYON_API_URL || 'https://pyincccrm.bothelper.vn' }}
-
-      - name: Print Android Release Facebook Key Hash
-        env:
-          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-        run: |
-          if [ -f "mobile_app/android/app/pyincc-release.jks" ]; then
-            KEY_HASH=$(keytool -exportcert -alias "$ANDROID_KEY_ALIAS" -keystore mobile_app/android/app/pyincc-release.jks -storepass "$ANDROID_STORE_PASSWORD" 2>/dev/null | openssl sha1 -binary | openssl base64)
-            echo "=========================================="
-            echo "Android Release Facebook Key Hash: $KEY_HASH"
-            echo "=========================================="
-            echo "### Android Release Facebook Key Hash" >> "$GITHUB_STEP_SUMMARY"
-            echo "\`$KEY_HASH\`" >> "$GITHUB_STEP_SUMMARY"
-          elif [ -f "$HOME/.android/debug.keystore" ]; then
-            KEY_HASH=$(keytool -exportcert -alias androiddebugkey -keystore "$HOME/.android/debug.keystore" -storepass android 2>/dev/null | openssl sha1 -binary | openssl base64)
-            echo "=========================================="
-            echo "Android Fallback Debug Facebook Key Hash: $KEY_HASH"
-            echo "=========================================="
-            echo "### Android Fallback Debug Facebook Key Hash" >> "$GITHUB_STEP_SUMMARY"
-            echo "\`$KEY_HASH\`" >> "$GITHUB_STEP_SUMMARY"
-          fi
+            "--dart-define=SUPABASE_URL=$SUPABASE_URL" \
+            "--dart-define=SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY" \
+            "--dart-define=TRYON_API_URL=$TRYON_API_URL"
 
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: pyincc-aicrm-release-apk
           path: mobile_app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
           retention-days: 30
