@@ -169,7 +169,11 @@ function verifyMetaSignature(rawBody, signature) {
   return safeEqual(signature, expected);
 }
 
-app.get('/health', (_req, res) => res.json({ ok: true, service: 'pyincc-meta-webhook' }));
+app.get('/health', (_req, res) => res.json({
+  ok: true,
+  service: 'pyincc-meta-webhook',
+  commit: (process.env.RENDER_GIT_COMMIT || 'local').slice(0, 7),
+}));
 app.get('/privacy', (_req, res) => res.type('html').send(
   '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Chính sách Quyền riêng tư — PyinccCRM</title></head>' +
   '<body style="font-family:sans-serif;max-width:720px;margin:32px auto;padding:0 16px;line-height:1.6;">' +
@@ -185,14 +189,22 @@ app.get('/terms', (_req, res) => res.type('html').send(
   '<p>PyinccCRM là công cụ hỗ trợ chủ tiệm và nhân viên quản lý hội thoại Messenger, lịch hẹn và mô phỏng mẫu tư vấn. Chủ tiệm chịu trách nhiệm kiểm duyệt mọi nội dung trước khi gửi tới khách hàng.</p>' +
   '<p>Liên hệ: phanhungkg03@gmail.com</p></body></html>'
 ));
-app.get('/data-deletion', (_req, res) => res.type('html').send(
-  '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Hướng dẫn Xóa Dữ liệu — PyinccCRM</title></head>' +
-  '<body style="font-family:sans-serif;max-width:720px;margin:32px auto;padding:0 16px;line-height:1.6;">' +
-  '<h1>Hướng dẫn Xóa Dữ liệu Người dùng — PyinccCRM</h1>' +
-  '<p>Để thu hồi quyền và xóa toàn bộ dữ liệu liên kết Fanpage:</p>' +
-  '<ol><li>Vào Cài đặt Facebook → Tiện ích tích hợp cho doanh nghiệp (Business Integrations) → chọn <strong>PyinccCRM</strong> → bấm <strong>Gỡ</strong>. Hệ thống sẽ tự động nhận tín hiệu thu hồi qua Deauthorize Callback và xóa Page Token đã lưu.</li>' +
-  '<li>Hoặc gửi email yêu cầu xóa toàn bộ dữ liệu hội thoại về <strong>phanhungkg03@gmail.com</strong>, yêu cầu sẽ được xử lý trong vòng 48 giờ.</li></ol></body></html>'
-));
+app.get('/data-deletion', (req, res) => {
+  const rawCode = typeof req.query.code === 'string' ? req.query.code.trim() : '';
+  const safeCode = /^[a-zA-Z0-9_-]{1,64}$/.test(rawCode) ? rawCode : '';
+  const statusBanner = safeCode
+    ? `<p style="padding:12px;background:#e8f5e9;border-radius:8px;color:#1b5e20;"><strong>Trạng thái yêu cầu xóa dữ liệu (Mã xác nhận: ${safeCode}):</strong> Đã tiếp nhận và hoàn tất xóa toàn bộ liên kết Fanpage cùng token đã mã hóa của tài khoản Facebook tương ứng.</p>`
+    : '';
+  return res.type('html').send(
+    '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Hướng dẫn Xóa Dữ liệu — PyinccCRM</title></head>' +
+    '<body style="font-family:sans-serif;max-width:720px;margin:32px auto;padding:0 16px;line-height:1.6;">' +
+    '<h1>Hướng dẫn Xóa Dữ liệu Người dùng — PyinccCRM</h1>' +
+    statusBanner +
+    '<p>Để thu hồi quyền và xóa toàn bộ dữ liệu liên kết Fanpage:</p>' +
+    '<ol><li>Vào Cài đặt Facebook → Tiện ích tích hợp cho doanh nghiệp (Business Integrations) → chọn <strong>PyinccCRM</strong> → bấm <strong>Gỡ</strong>. Hệ thống sẽ tự động nhận tín hiệu thu hồi qua Deauthorize Callback và xóa Page Token đã lưu.</li>' +
+    '<li>Hoặc gửi email yêu cầu xóa toàn bộ dữ liệu hội thoại về <strong>phanhungkg03@gmail.com</strong>, yêu cầu sẽ được xử lý trong vòng 48 giờ.</li></ol></body></html>'
+  );
+});
 app.get('/internal/status', requireInternalApiKey, (_req, res) =>
   res.json({ ok: true, configured: missingConfig.length === 0 }));
 app.get('/internal/webhook-status', requireInternalApiKey, (_req, res) =>
@@ -271,7 +283,13 @@ app.post('/auth/facebook/data-deletion', express.urlencoded({ extended: false })
   const parsed = verifyFacebookSignedRequest(req.body?.signed_request);
   if (!parsed?.user_id) return res.status(403).json({ error: 'Forbidden' });
   const fbUserId = String(parsed.user_id);
-  await supabase.from('connected_pages').delete().eq('connected_by_fb_user_id', fbUserId);
+  // Deletes matching connected_pages rows (including encrypted page_access_token) and clears invited_fb_user_id
+  const { error: deleteErr } = await supabase.from('connected_pages').delete().eq('connected_by_fb_user_id', fbUserId);
+  if (deleteErr) {
+    console.error(JSON.stringify({ event: 'data_deletion_failed', message: deleteErr.message }));
+    return res.status(500).json({ error: 'DATA_DELETION_FAILED' });
+  }
+  await supabase.from('memberships').update({ invited_fb_user_id: null }).eq('invited_fb_user_id', fbUserId);
   const confirmationCode = crypto.createHash('sha256')
     .update(`${fbUserId}:${Date.now()}`)
     .digest('hex')
@@ -280,24 +298,17 @@ app.post('/auth/facebook/data-deletion', express.urlencoded({ extended: false })
   return res.json({ url: statusUrl, confirmation_code: confirmationCode });
 }));
 
+// App uses native Facebook Login SDK (/auth/facebook/exchange-token); web OAuth callback rejects requests without valid CSRF state
 app.get('/auth/facebook/callback', (req, res) => {
   const oauthError = typeof req.query.error === 'string' ? req.query.error.trim() : '';
-  const code = typeof req.query.code === 'string' ? req.query.code.trim() : '';
+  const state = typeof req.query.state === 'string' ? req.query.state.trim() : '';
   if (oauthError) {
-    return res.status(400).type('html').send(
-      '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Kết nối Facebook — PyinccCRM</title></head>' +
-      '<body style="font-family:sans-serif;max-width:560px;margin:40px auto;padding:0 16px;">' +
-      '<h2>Kết nối Facebook đã bị huỷ</h2><p>Bạn có thể đóng cửa sổ này và quay lại ứng dụng PyinccAICRM.</p></body></html>'
-    );
+    return res.status(400).json({ error: 'OAUTH_CANCELLED_OR_DENIED' });
   }
-  if (!code) {
-    return res.status(400).json({ error: 'MISSING_OAUTH_CODE' });
+  if (!state) {
+    return res.status(400).json({ error: 'INVALID_OR_MISSING_STATE' });
   }
-  return res.status(200).type('html').send(
-    '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Kết nối Facebook — PyinccCRM</title></head>' +
-    '<body style="font-family:sans-serif;max-width:560px;margin:40px auto;padding:0 16px;">' +
-    '<h2>Đã nhận xác thực Facebook</h2><p>Vui lòng quay lại ứng dụng PyinccAICRM để hoàn tất kết nối Fanpage.</p></body></html>'
-  );
+  return res.status(400).json({ error: 'WEB_OAUTH_FLOW_DISABLED' });
 });
 
 app.get('/connected-pages', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
