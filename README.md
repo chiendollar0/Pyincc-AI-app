@@ -16,6 +16,7 @@
 | CI build APK debug (GitHub Actions) | ✅ | Các run gần nhất xanh, có artifact APK |
 | Domain backend `https://pyincccrm.bothelper.vn` | ✅ | `/health` trả 200, TLS do Render cấp |
 | Cloudflare đứng trước Render | ✅ | Header `server: cloudflare` xác nhận |
+| Edge Function phân tích mặt Gemini (`tryon-analyze`) | ✅ | Đã cấu hình `GEMINI_API_KEY` trong Supabase Secrets, trả `200` với `analysis` JSON |
 | Đăng nhập Supabase trong app | ⬜ | Cần kiểm tra end-to-end với tài khoản thật |
 | `GET /messages` với JWT hợp lệ trả 200 | ⬜ | Đã nối JWT từ màn đăng nhập, chờ xác nhận trên thiết bị |
 | Webhook POST có chữ ký đúng trả 200 qua domain | ⬜ | Chưa kiểm tra qua domain mới |

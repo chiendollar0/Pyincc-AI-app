@@ -60,7 +60,7 @@ Deno.serve(async (req: Request) => {
       'Hãy quan sát ảnh khuôn mặt khách hàng và chọn 1 mẫu phù hợp nhất từ danh mục sau:',
       catalogSummary || '- id: brow_1, name: Mày sợi Hairstroke Nâu Tây, category: eyebrow',
       'Trả về đúng định dạng JSON (không bọc markdown) với các trường:',
-      '{"face_shape": "...", "skin_tone": "...", "recommended_item_id": "...", "consultation_script": "..."}',
+      '{"face_shape": "...", "skin_tone": "...", "current_condition": "...", "recommended_item_id": "...", "consultation_script": "..."}',
     ].join('\n');
 
     const geminiRes = await fetch(
