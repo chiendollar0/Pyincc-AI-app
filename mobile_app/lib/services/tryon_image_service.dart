@@ -149,11 +149,19 @@ class TryOnImageService {
     if (imageBytes.isEmpty) {
       throw const ApiException(0, 'Chưa có ảnh mô phỏng AI để gửi.');
     }
+    final cleanRecipient = recipientId.trim();
+    if (cleanRecipient.isEmpty) {
+      throw const ApiException(
+        0,
+        'Vui lòng chọn hội thoại khách hàng hoặc nhập mã khách hàng trước khi gửi.',
+      );
+    }
 
+    // Bước 1: Tạo bản nháp ở trạng thái pending
     final draftRes = await _api.post(
       '/tryon-drafts',
       {
-        'recipientId': recipientId.trim(),
+        'recipientId': cleanRecipient,
         'imageBase64': base64Encode(imageBytes),
         'caption': caption.trim(),
       },
@@ -164,9 +172,17 @@ class TryOnImageService {
     final mediaRecordId =
         media is Map<String, dynamic> ? (media['id'] ?? '').toString() : '';
     if (mediaRecordId.isEmpty) {
-      throw const ApiException(0, 'Chưa lưu được bản ghi duyệt ảnh.');
+      throw const ApiException(0, 'Chưa lưu được bản nháp duyệt ảnh.');
     }
 
+    // Bước 2: Nhân viên duyệt tường minh (pending -> approved)
+    await _api.post(
+      '/tryon-drafts/${Uri.encodeComponent(mediaRecordId)}/approve',
+      {'caption': caption.trim()},
+      timeout: const Duration(seconds: 15),
+    );
+
+    // Bước 3: Máy chủ kiểm tra approved + recipientId + Fanpage rồi mới gửi
     return _api.post(
       '/send-tryon-image',
       {'mediaRecordId': mediaRecordId},

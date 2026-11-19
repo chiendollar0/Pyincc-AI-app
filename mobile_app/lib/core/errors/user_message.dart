@@ -31,6 +31,8 @@ String userMessage(Object error) {
         return 'Không tìm thấy dữ liệu. Có thể đã bị xoá.';
       case 409:
         return 'Thao tác này đang được xử lý hoặc đã hoàn tất.';
+      case 422:
+        return 'Không thể gửi tin: thiếu thông tin khách hàng, chưa kết nối Fanpage, hoặc đã quá khung 24 giờ.';
       case 429:
         return 'Đã đạt giới hạn trong 24 giờ. Vui lòng thử lại sau.';
       case 501:

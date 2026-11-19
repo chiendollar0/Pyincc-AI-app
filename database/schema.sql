@@ -50,6 +50,8 @@ create table if not exists public.conversation_messages (
   message_type text check (message_type in ('text','image','file','audio','video')) default 'text',
   message_text text,
   image_url text,
+  storage_path text,
+  page_id text,
   message_id text,
   attachment_type text,
   attachment_url text,
@@ -137,6 +139,17 @@ create table if not exists public.bookings (
   technician_id uuid references public.users(id),
   scheduled_at timestamptz not null,
   status text check (status in ('pending','confirmed','done','cancelled')) default 'pending'
+);
+
+create unique index if not exists bookings_active_slot
+  on public.bookings (org_id, scheduled_at)
+  where status in ('pending', 'confirmed');
+
+create table if not exists public.data_deletion_requests (
+  code text primary key,
+  fb_user_id text not null,
+  status text not null default 'completed',
+  created_at timestamptz default now()
 );
 
 create index if not exists idx_conversation_messages_customer_psid on public.conversation_messages(customer_psid);

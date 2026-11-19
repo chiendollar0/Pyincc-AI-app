@@ -31,6 +31,11 @@ class TryOnStudioScreen extends StatefulWidget {
 }
 
 class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
+  static const bool _enableTryOnGenerate = bool.fromEnvironment(
+    'ENABLE_TRYON_GENERATE',
+    defaultValue: false,
+  );
+
   final ImagePicker _picker = ImagePicker();
 
   File? _originalImage;
@@ -89,7 +94,9 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   }
 
   bool _isUnrecognizedFace(Map<String, dynamic> analysis) {
-    if (analysis['face_detected'] == false) return true;
+    if (analysis.containsKey('face_detected')) {
+      return analysis['face_detected'] != true;
+    }
     final faceShape = (analysis['face_shape'] ?? '').toString().toLowerCase();
     final skinTone = (analysis['skin_tone'] ?? '').toString().toLowerCase();
     return faceShape.contains('không thể xác định') ||
@@ -99,6 +106,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   }
 
   Future<void> _pickImage(ImageSource source) async {
+    if (_isBusy) return;
     XFile? picked;
     try {
       picked = await _picker.pickImage(source: source, imageQuality: 85);
@@ -113,9 +121,10 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     }
 
     if (picked == null) return;
+    final path = picked.path;
 
     setState(() {
-      _originalImage = File(picked!.path);
+      _originalImage = File(path);
       _aiResultBytes = null;
       _isBusy = true;
       _faceSummary = 'Đang phân tích...';
@@ -178,6 +187,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   }
 
   Future<void> _generatePreview() async {
+    if (_isBusy) return;
     final image = _originalImage;
     final item = _selectedItem;
     if (image == null || item == null) return;
@@ -203,43 +213,64 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     }
   }
 
+  String _maskPsid(String psid) {
+    final trimmed = psid.trim();
+    if (trimmed.length <= 4) return trimmed;
+    return '...${trimmed.substring(trimmed.length - 4)}';
+  }
+
   Future<void> _approveAndSendToCustomer() async {
+    if (_isBusy) return;
     final bytes = _aiResultBytes;
     final item = _selectedItem;
     if (bytes == null || item == null) return;
 
-    final psidCtrl = TextEditingController(
-      text: widget.customerPsid ?? '',
-    );
+    final fixedPsid = (widget.customerPsid ?? '').trim();
+    final hasFixedPsid = fixedPsid.isNotEmpty;
+    final psidCtrl = TextEditingController(text: fixedPsid);
     final captionCtrl = TextEditingController(
       text:
-          'Dạ em gửi chị xem trước ảnh mô phỏng mẫu ${item['name']} (${item['price']}) bên em nhé ạ!',
+          'Dạ em gửi chị xem trước ảnh mô phỏng mẫu ${item['name']} bên em để mình tham khảo dáng nhé ạ!',
     );
+
+    final recipientLabel = widget.customerName != null && hasFixedPsid
+        ? '${widget.customerName} (${_maskPsid(fixedPsid)})'
+        : (hasFixedPsid ? 'Khách (${_maskPsid(fixedPsid)})' : 'khách hàng');
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(
-          widget.customerName != null
-              ? 'Duyệt & gửi ảnh cho ${widget.customerName}'
-              : 'Duyệt & gửi ảnh thử cho khách',
-        ),
+        title: Text('Duyệt & gửi ảnh cho $recipientLabel'),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              TextField(
-                controller: psidCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Mã khách hàng (để trống nếu chỉ lưu hồ sơ)',
+              if (hasFixedPsid)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(
+                    'Người nhận cố định từ hội thoại: $recipientLabel',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textMuted,
+                    ),
+                  ),
+                )
+              else ...[
+                TextField(
+                  controller: psidCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Mã khách hàng (PSID bắt buộc)',
+                  ),
                 ),
-              ),
-              const SizedBox(height: 10),
+                const SizedBox(height: 10),
+              ],
               TextField(
                 controller: captionCtrl,
                 maxLines: 3,
                 decoration: const InputDecoration(
-                  labelText: 'Lời nhắn gửi kèm ảnh',
+                  labelText: 'Lời nhắn gửi kèm ảnh (nhân viên kiểm duyệt)',
                 ),
               ),
             ],
@@ -260,6 +291,16 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     );
 
     if (confirmed != true) return;
+    final targetPsid = hasFixedPsid ? fixedPsid : psidCtrl.text.trim();
+    if (targetPsid.isEmpty) {
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        'Vui lòng mở Studio từ hội thoại khách hoặc nhập mã khách hàng trước khi gửi.',
+        isError: true,
+      );
+      return;
+    }
 
     setState(() => _isBusy = true);
     try {
@@ -267,18 +308,15 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
         apiBaseUrl: widget.apiBaseUrl,
         authToken: widget.authToken,
       );
-      final result = await service.sendApprovedPreview(
+      await service.sendApprovedPreview(
         imageBytes: bytes,
-        recipientId: psidCtrl.text,
+        recipientId: targetPsid,
         caption: captionCtrl.text,
       );
       if (!mounted) return;
-      final delivered = result['deliveredToMessenger'] == true;
       showAppMessage(
         context,
-        delivered
-            ? 'Đã lưu ảnh và gửi qua Messenger cho khách thành công.'
-            : 'Đã lưu ảnh mô phỏng vào hồ sơ khách hàng thành công.',
+        'Đã duyệt và gửi ảnh mô phỏng qua Messenger cho khách thành công.',
       );
     } catch (error) {
       if (!mounted) return;
@@ -552,32 +590,42 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
                 },
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: (_originalImage == null || _isBusy)
-                          ? null
-                          : _generatePreview,
-                      icon: const Icon(Icons.auto_fix_high, size: 18),
-                      label: const Text('Tạo ảnh thử AI'),
+            if (_enableTryOnGenerate)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: (_originalImage == null || _isBusy)
+                            ? null
+                            : _generatePreview,
+                        icon: const Icon(Icons.auto_fix_high, size: 18),
+                        label: const Text('Tạo ảnh thử AI'),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: (_aiResultBytes == null || _isBusy)
-                          ? null
-                          : _approveAndSendToCustomer,
-                      icon: const Icon(Icons.check_circle_outline, size: 18),
-                      label: const Text('Duyệt gửi khách'),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: (_aiResultBytes == null || _isBusy)
+                            ? null
+                            : _approveAndSendToCustomer,
+                        icon: const Icon(Icons.check_circle_outline, size: 18),
+                        label: const Text('Duyệt gửi khách'),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
+              )
+            else
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: Text(
+                  'Studio AI hiện dùng để phân tích dáng mặt & gợi ý mẫu nội bộ. Tính năng ghép ảnh mô phỏng trực tiếp sẽ mở khi kích hoạt model.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+                ),
               ),
-            ),
           ],
         ),
       ),
