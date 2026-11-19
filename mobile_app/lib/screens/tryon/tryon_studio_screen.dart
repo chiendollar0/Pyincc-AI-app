@@ -336,56 +336,62 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
                     ),
                   ),
                   child: _originalImage == null
-                      ? Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.face_retouching_natural,
-                              size: 56,
-                              color: AppColors.primary.withValues(alpha: 0.5),
+                      ? Center(
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 12,
+                              horizontal: 16,
                             ),
-                            const SizedBox(height: 12),
-                            const Text(
-                              'Chưa có ảnh mặt mộc của khách',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 15,
-                                color: AppColors.textPrimary,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            const Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 28),
-                              child: Text(
-                                'Chọn ảnh từ thư viện hoặc chụp trực tiếp để phân tích dáng mặt và mô phỏng mẫu mày/môi.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: AppColors.textMuted,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 8,
-                              alignment: WrapAlignment.center,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                FilledButton.icon(
-                                  onPressed: () =>
-                                      _pickImage(ImageSource.gallery),
-                                  icon: const Icon(Icons.add_photo_alternate),
-                                  label: const Text('Chọn ảnh thư viện'),
+                                Icon(
+                                  Icons.face_retouching_natural,
+                                  size: 48,
+                                  color: AppColors.primary.withValues(alpha: 0.5),
                                 ),
-                                OutlinedButton.icon(
-                                  onPressed: () =>
-                                      _pickImage(ImageSource.camera),
-                                  icon: const Icon(Icons.camera_alt),
-                                  label: const Text('Chụp ảnh'),
+                                const SizedBox(height: 10),
+                                const Text(
+                                  'Chưa có ảnh mặt mộc của khách',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 15,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                const Text(
+                                  'Chọn ảnh từ thư viện hoặc chụp trực tiếp để phân tích dáng mặt và mô phỏng mẫu mày/môi.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.textMuted,
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                Wrap(
+                                  spacing: 10,
+                                  runSpacing: 8,
+                                  alignment: WrapAlignment.center,
+                                  children: [
+                                    FilledButton.icon(
+                                      onPressed: () =>
+                                          _pickImage(ImageSource.gallery),
+                                      icon: const Icon(Icons.add_photo_alternate),
+                                      label: const Text('Chọn ảnh thư viện'),
+                                    ),
+                                    OutlinedButton.icon(
+                                      onPressed: () =>
+                                          _pickImage(ImageSource.camera),
+                                      icon: const Icon(Icons.camera_alt),
+                                      label: const Text('Chụp ảnh'),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
-                          ],
+                          ),
                         )
                       : ClipRRect(
                           borderRadius: BorderRadius.circular(15),

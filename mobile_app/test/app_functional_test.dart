@@ -32,6 +32,11 @@ void main() {
   testWidgets(
     '2. Signed-in dashboard renders BrandHeader, KPIs, Studio AI catalog, and Logout',
     (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1080, 1920);
+      tester.view.devicePixelRatio = 2.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
       await tester.pumpWidget(
         const BeautyCrmApp(initialAuthToken: 'session-token-for-widget-test'),
       );
@@ -71,6 +76,11 @@ void main() {
   testWidgets(
     '3. Quan ly tiem tab manages Facebook connect and enforces Zero-Key UI',
     (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1080, 1920);
+      tester.view.devicePixelRatio = 2.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
       await tester.pumpWidget(
         const BeautyCrmApp(initialAuthToken: 'session-token-for-widget-test'),
       );

@@ -164,14 +164,14 @@ class EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               icon,
-              size: 56,
+              size: 52,
               color: AppColors.primary.withValues(alpha: 0.5),
             ),
             const SizedBox(height: 12),
