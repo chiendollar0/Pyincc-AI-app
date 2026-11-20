@@ -1,6 +1,8 @@
 // ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pyincc_app/core/errors/api_exception.dart';
+import 'package:pyincc_app/core/errors/user_message.dart';
 import 'package:pyincc_app/main.dart';
 
 void main() {
@@ -106,6 +108,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('Kết nối với Facebook'), findsOneWidget);
+      expect(find.text('Quản lý Nhân viên & Nhật ký'), findsOneWidget);
       expect(find.text('Lưu kịch bản & bảng giá'), findsOneWidget);
 
       // Zero-Key UI: never expose backend secrets
@@ -116,4 +119,27 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
+
+  test('4. userMessage maps Luong B and staff management error codes cleanly', () {
+    expect(
+      userMessage(const ApiException(429, 'AI_DAILY_CAP')),
+      contains('50 lượt'),
+    );
+    expect(
+      userMessage(const ApiException(403, 'NOT_APPROVED')),
+      contains('chưa được duyệt'),
+    );
+    expect(
+      userMessage(const ApiException(409, 'ALREADY_SENDING')),
+      contains('đang được gửi'),
+    );
+    expect(
+      userMessage(const ApiException(409, 'LAST_OWNER_PROTECTED')),
+      contains('Chủ tiệm cuối cùng'),
+    );
+    expect(
+      userMessage(const ApiException(400, 'CANNOT_MODIFY_SELF')),
+      contains('chính tài khoản'),
+    );
+  });
 }

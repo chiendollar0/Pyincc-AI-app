@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'core/errors/user_message.dart';
 import 'core/theme/app_theme.dart';
 import 'screens/inbox/inbox_screen.dart';
+import 'screens/staff/staff_management_screen.dart';
 import 'screens/tryon/tryon_studio_screen.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
 import 'services/facebook_connect_service.dart';
 import 'services/handoff_service.dart';
 import 'services/inbox_service.dart';
+import 'services/staff_service.dart';
 
 void main() {
   runApp(const BeautyCrmApp());
@@ -793,6 +795,40 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
                   ),
                 ],
               ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 8,
+              ),
+              leading: CircleAvatar(
+                backgroundColor: AppColors.primary.withValues(alpha: 0.12),
+                child: const Icon(
+                  Icons.manage_accounts_outlined,
+                  color: AppColors.primary,
+                ),
+              ),
+              title: const Text(
+                'Quản lý Nhân viên & Nhật ký',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+              subtitle: const Text(
+                'Mời nhân viên, đổi quyền Chủ tiệm/Nhân viên, thu hồi quyền và xem nhật ký hoạt động.',
+                style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => StaffManagementScreen(
+                      staffService: StaffService(widget.inboxService.apiClient),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
           const SizedBox(height: 12),
