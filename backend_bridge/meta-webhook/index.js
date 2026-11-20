@@ -807,6 +807,256 @@ app.post('/send-tryon-image', writeLimiter, requireAuth, requireRole('owner', 's
   }
 }));
 
+const HANDOFF_DAILY_AI_CAP = 50;
+const ANALYSIS_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    summary: { type: 'STRING' },
+    risk: { type: 'STRING', enum: ['low', 'medium', 'high'] },
+    face_detected: { type: 'BOOLEAN' },
+    recommended_item_id: { type: 'STRING' },
+    draft_reply: { type: 'STRING' },
+  },
+  required: ['summary', 'risk', 'draft_reply'],
+};
+
+const HANDOFF_PROMPT = [
+  'Bạn là trợ lý phân tích nội bộ cho chủ tiệm thẩm mỹ/phun xăm.',
+  '- Tóm tắt ngắn gọn nhu cầu khách (summary) và đánh giá mức độ rủi ro ca làm (risk: low, medium, high — ca sửa mày trổ xanh/đỏ, sẹo, cơ địa nhạy cảm là high).',
+  '- Nếu có ảnh: xác định face_detected (true/false) và chọn recommended_item_id phù hợp nhất trong DANH MỤC (hoặc để trống nếu không phù hợp).',
+  '- Soạn draft_reply lịch sự, tự nhiên để chủ tiệm kiểm duyệt trước khi gửi. KHÔNG tự bịa giá ngoài danh mục, KHÔNG cam kết 100% hay đảm bảo tuyệt đối.',
+].join('\n');
+
+function detectImageMime(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
+  if (
+    buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+    buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
+  ) return 'image/webp';
+  return null;
+}
+
+async function loadCatalog(orgId) {
+  const { data } = await supabase.from('catalog_items')
+    .select('id, name, category, price')
+    .eq('org_id', orgId);
+  return Array.isArray(data) ? data : [];
+}
+
+async function dailyAiCount(orgId) {
+  const vnNow = new Date(Date.now() + 7 * 3600 * 1000);
+  const yyyy = vnNow.getUTCFullYear();
+  const mo = String(vnNow.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(vnNow.getUTCDate()).padStart(2, '0');
+  const startOfVnDayIso = new Date(`${yyyy}-${mo}-${dd}T00:00:00+07:00`).toISOString();
+  const { count } = await supabase.from('handoff_cases')
+    .select('id', { count: 'exact', head: true })
+    .eq('org_id', orgId)
+    .gte('created_at', startOfVnDayIso)
+    .in('status', ['analyzing', 'pending_review', 'approved', 'sending', 'sent', 'rejected']);
+  return count || 0;
+}
+
+async function analyzeCase({ orgId, text, imageBase64, mime, catalog }) {
+  const geminiKey = String(process.env.GEMINI_API_KEY || '').trim();
+  if (!geminiKey) {
+    throw Object.assign(new Error('GEMINI_NOT_CONFIGURED'), { code: 'GEMINI_NOT_CONFIGURED' });
+  }
+  const cap = await dailyAiCount(orgId);
+  if (cap >= HANDOFF_DAILY_AI_CAP) {
+    throw Object.assign(new Error('AI_DAILY_CAP'), { code: 'AI_DAILY_CAP' });
+  }
+  const parts = [{
+    text: `${HANDOFF_PROMPT}\nDANH MỤC: ${JSON.stringify(catalog)}\nKHÁCH NÓI: ${text || '(không có)'}`,
+  }];
+  if (imageBase64 && mime) {
+    parts.push({ inline_data: { mime_type: mime, data: imageBase64 } });
+  }
+  const { data } = await axios.post(
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+    {
+      contents: [{ parts }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: ANALYSIS_SCHEMA,
+        temperature: 0.2,
+      },
+    },
+    { headers: { 'x-goog-api-key': geminiKey }, timeout: 30000 },
+  );
+  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+  const out = JSON.parse(rawText);
+  if (!catalog.some((c) => String(c.id) === String(out.recommended_item_id))) {
+    out.recommended_item_id = null;
+  }
+  return out;
+}
+
+app.get('/handoff-cases', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
+  const rawStatus = String(req.query.status || '').trim();
+  const allowedStatuses = new Set(['new', 'analyzing', 'pending_review', 'approved', 'sending', 'sent', 'rejected', 'failed']);
+  const statusList = rawStatus
+    ? rawStatus.split(',').map((s) => s.trim()).filter((s) => allowedStatuses.has(s))
+    : [];
+
+  let query = supabase.from('handoff_cases')
+    .select('id, org_id, source, message_id, page_id, psid, customer_text, image_path, status, analysis, draft_reply, created_by, approved_by, approved_at, created_at')
+    .eq('org_id', req.orgId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (statusList.length === 1) {
+    query = query.eq('status', statusList[0]);
+  } else if (statusList.length > 1) {
+    query = query.in('status', statusList);
+  }
+  const { data, error } = await query;
+  if (error) {
+    console.error(JSON.stringify({ event: 'fetch_handoff_cases_failed', message: error.message }));
+    return res.status(500).json({ error: 'Failed to fetch handoff cases' });
+  }
+  const cases = await Promise.all((data || []).map(async (row) => {
+    let signedImageUrl = null;
+    if (row.image_path) {
+      try { signedImageUrl = await createSignedUrl(row.image_path, 3600); } catch (_) { /* ignore */ }
+    }
+    return { ...row, image_url: signedImageUrl };
+  }));
+  return res.json({ cases });
+}));
+
+app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner', 'staff'),
+  express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
+    const imageBase64 = String(req.body?.image_base64 || '').trim();
+    const customerText = typeof req.body?.customer_text === 'string' ? req.body.customer_text.trim() : null;
+    if (!imageBase64) return res.status(400).json({ error: 'IMAGE_REQUIRED' });
+    const buf = Buffer.from(imageBase64, 'base64');
+    if (!buf.length || buf.length > 15 * 1024 * 1024) return res.status(413).json({ error: 'IMAGE_TOO_LARGE' });
+    const mime = detectImageMime(buf);
+    if (!mime) return res.status(415).json({ error: 'UNSUPPORTED_IMAGE_TYPE' });
+    const ext = mime === 'image/png' ? 'png' : (mime === 'image/webp' ? 'webp' : 'jpg');
+    const storagePath = `owner/${req.orgId}/${crypto.randomUUID()}.${ext}`;
+    const { error: upErr } = await uploadWithRetry(storagePath, buf, mime);
+    if (upErr) return res.status(502).json({ error: 'UPLOAD_FAILED' });
+    const catalog = await loadCatalog(req.orgId);
+    const { data: row, error: insertErr } = await supabase.from('handoff_cases').insert({
+      org_id: req.orgId,
+      source: 'owner_capture',
+      customer_text: customerText,
+      image_path: storagePath,
+      created_by: req.authUser.id,
+      status: 'analyzing',
+    }).select('id').single();
+    if (insertErr || !row) return res.status(500).json({ error: 'CASE_CREATE_FAILED' });
+
+    try {
+      const analysis = await analyzeCase({ orgId: req.orgId, text: customerText, imageBase64, mime, catalog });
+      await supabase.from('handoff_cases').update({
+        analysis,
+        draft_reply: analysis.draft_reply || null,
+        status: 'pending_review',
+      }).eq('id', row.id).eq('org_id', req.orgId);
+      return res.json({ id: row.id, status: 'pending_review', analysis });
+    } catch (err) {
+      await supabase.from('handoff_cases').update({ status: 'failed' }).eq('id', row.id).eq('org_id', req.orgId);
+      const status = err.code === 'AI_DAILY_CAP' ? 429 : (err.code === 'GEMINI_NOT_CONFIGURED' ? 503 : 502);
+      return res.status(status).json({ error: err.code || 'AI_FAILED' });
+    }
+  }));
+
+app.post('/handoff-cases/:id/analyze', writeLimiter, requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+  const { data: row } = await supabase.from('handoff_cases').select('*')
+    .eq('id', req.params.id).eq('org_id', req.orgId).maybeSingle();
+  if (!row) return res.status(404).json({ error: 'NOT_FOUND' });
+  if (row.status !== 'new' && row.status !== 'failed') {
+    return res.status(409).json({ error: 'ALREADY_ANALYZED' });
+  }
+  await supabase.from('handoff_cases').update({ status: 'analyzing' }).eq('id', row.id).eq('org_id', req.orgId);
+  try {
+    let imageBase64 = null;
+    let mime = null;
+    if (row.image_path) {
+      const { data: blob, error: dlErr } = await supabase.storage.from(config.storageBucket).download(row.image_path);
+      if (!dlErr && blob) {
+        const buf = Buffer.from(await blob.arrayBuffer());
+        mime = detectImageMime(buf);
+        if (mime) imageBase64 = buf.toString('base64');
+      }
+    }
+    const catalog = await loadCatalog(req.orgId);
+    const analysis = await analyzeCase({ orgId: req.orgId, text: row.customer_text, imageBase64, mime, catalog });
+    await supabase.from('handoff_cases').update({
+      analysis,
+      draft_reply: analysis.draft_reply || null,
+      status: 'pending_review',
+    }).eq('id', row.id).eq('org_id', req.orgId);
+    return res.json({ id: row.id, status: 'pending_review', analysis });
+  } catch (err) {
+    await supabase.from('handoff_cases').update({ status: 'failed' }).eq('id', row.id).eq('org_id', req.orgId);
+    const status = err.code === 'AI_DAILY_CAP' ? 429 : (err.code === 'GEMINI_NOT_CONFIGURED' ? 503 : 502);
+    return res.status(status).json({ error: err.code || 'AI_FAILED' });
+  }
+}));
+
+app.post('/handoff-cases/:id/approve', writeLimiter, requireAuth, requireRole('owner', 'staff'),
+  express.json({ limit: '8kb' }), asyncHandler(async (req, res) => {
+    const text = String(req.body?.draft_reply || '').trim();
+    if (!text || text.length > 2000) return res.status(400).json({ error: 'TEXT_INVALID' });
+    const { data, error } = await supabase.from('handoff_cases').update({
+      draft_reply: text,
+      status: 'approved',
+      approved_by: req.authUser.id,
+      approved_at: new Date().toISOString(),
+    })
+      .eq('id', req.params.id)
+      .eq('org_id', req.orgId)
+      .eq('status', 'pending_review')
+      .select('id, status')
+      .maybeSingle();
+    if (error || !data) return res.status(404).json({ error: 'NOT_PENDING' });
+    return res.json({ success: true, id: data.id, status: data.status });
+  }));
+
+app.post('/handoff-cases/:id/reject', writeLimiter, requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+  const { data, error } = await supabase.from('handoff_cases').update({ status: 'rejected' })
+    .eq('id', req.params.id)
+    .eq('org_id', req.orgId)
+    .in('status', ['new', 'pending_review', 'approved'])
+    .select('id, status')
+    .maybeSingle();
+  if (error || !data) return res.status(404).json({ error: 'NOT_REJECTABLE' });
+  return res.json({ success: true, id: data.id, status: data.status });
+}));
+
+app.post('/handoff-cases/:id/send', writeLimiter, requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+  const { data: c } = await supabase.from('handoff_cases').select('*')
+    .eq('id', req.params.id).eq('org_id', req.orgId).maybeSingle();
+  if (!c) return res.status(404).json({ error: 'NOT_FOUND' });
+  if (c.status === 'sending' || c.status === 'sent') return res.status(409).json({ error: 'ALREADY_SENDING' });
+  if (c.status !== 'approved' || !c.approved_by || !c.approved_at || !c.draft_reply) {
+    return res.status(403).json({ error: 'NOT_APPROVED' });
+  }
+  if (!c.psid || !c.page_id) return res.status(422).json({ error: 'NO_RECIPIENT' });
+  const page = await resolvePageCredentialsForOrg(req.orgId, c.page_id);
+  if (!page) return res.status(503).json({ error: 'NO_PAGE' });
+  const { data: claimed } = await supabase.from('handoff_cases').update({ status: 'sending' })
+    .eq('id', c.id).eq('org_id', req.orgId).eq('status', 'approved').select('id').maybeSingle();
+  if (!claimed) return res.status(409).json({ error: 'ALREADY_SENDING' });
+  try {
+    await axios.post(`https://graph.facebook.com/${config.graphApiVersion}/${page.pageId}/messages`, {
+      recipient: { id: c.psid }, messaging_type: 'RESPONSE', message: { text: c.draft_reply },
+    }, { headers: { Authorization: `Bearer ${page.pageAccessToken}` }, timeout: 15000 });
+    await supabase.from('handoff_cases').update({ status: 'sent' }).eq('id', c.id).eq('org_id', req.orgId);
+    return res.json({ success: true });
+  } catch (err) {
+    await supabase.from('handoff_cases').update({ status: 'approved' }).eq('id', c.id).eq('org_id', req.orgId);
+    const mapped = mapMetaSendError(err);
+    return res.status(mapped.status).json(mapped.body);
+  }
+}));
+
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -901,8 +1151,49 @@ app.post('/webhook', express.raw({ type: 'application/json', limit: '10mb' }), a
         webhookDiagnostics.lastPageId = pageId;
         webhookDiagnostics.lastKinds = [eventType];
 
+        if (event.pass_thread_control) {
+          const senderId = String(event.sender?.id || '').trim();
+          if (senderId && pageId) {
+            await supabase.from('handover_threads').upsert({
+              org_id: orgId,
+              page_id: pageId,
+              psid: senderId,
+              active: true,
+              updated_at: new Date().toISOString(),
+            }, { onConflict: 'page_id,psid' });
+          }
+          const signalId = eventIdForSignal(pageId, event);
+          await recordWebhookSignal({ eventId: signalId, eventType,
+            senderPsid: senderId || event.recipient?.id,
+            rawPayload: { pageId, event } });
+          continue;
+        }
+
         if (event.message) {
-          await handleFacebookMessage(orgId, pageId, event, event.message);
+          const uploadedPath = await handleFacebookMessage(orgId, pageId, event, event.message);
+          if (!event.message.is_echo && pageId) {
+            const senderId = String(event.sender?.id || '').trim();
+            if (senderId) {
+              const { data: th } = await supabase.from('handover_threads')
+                .select('org_id')
+                .eq('page_id', pageId)
+                .eq('psid', senderId)
+                .eq('active', true)
+                .maybeSingle();
+              if (th) {
+                await supabase.from('handoff_cases').upsert({
+                  org_id: th.org_id,
+                  source: 'business_ai_handover',
+                  message_id: event.message.mid || eventIdForSignal(pageId, event),
+                  page_id: pageId,
+                  psid: senderId,
+                  customer_text: typeof event.message.text === 'string' ? event.message.text : null,
+                  image_path: uploadedPath || null,
+                  status: 'new',
+                }, { onConflict: 'message_id', ignoreDuplicates: true });
+              }
+            }
+          }
         } else {
           const signalId = eventIdForSignal(pageId, event);
           await recordWebhookSignal({ eventId: signalId, eventType,
@@ -1014,6 +1305,7 @@ async function handleFacebookMessage(orgId, pageId, event, message) {
     }, { onConflict: 'source_message_id', ignoreDuplicates: true });
     if (mediaError) throw new Error(`Could not persist customer media: ${mediaError.message}`);
   }
+  return uploaded?.path || null;
 }
 
 async function uploadImageToSupabase(orgId, remoteUrl, messageId) {

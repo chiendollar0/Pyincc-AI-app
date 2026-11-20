@@ -1,24 +1,22 @@
 // ignore_for_file: deprecated_member_use
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/errors/user_message.dart';
 import '../../core/theme/app_theme.dart';
-import '../../services/inbox_service.dart';
+import '../../services/handoff_service.dart';
 
 class InboxScreen extends StatefulWidget {
   const InboxScreen({
     super.key,
-    required this.inboxService,
+    required this.handoffService,
     required this.onOpenTryOn,
     this.onSignOut,
   });
 
-  final InboxService inboxService;
-  final void Function({
-    String? psid,
-    String? customerName,
-    String? pageId,
-  }) onOpenTryOn;
+  final HandoffService handoffService;
+  final void Function({String? customerName}) onOpenTryOn;
   final VoidCallback? onSignOut;
 
   @override
@@ -26,85 +24,135 @@ class InboxScreen extends StatefulWidget {
 }
 
 class _InboxScreenState extends State<InboxScreen> {
-  List<Map<String, dynamic>> _items = [];
-  final Set<String> _sendingIds = {};
+  List<HandoffCase> _cases = const [];
+  final Set<String> _busyIds = {};
   bool _loading = true;
   String? _error;
   String _filter = 'all';
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _load(silent: true),
+    );
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final items = await widget.inboxService.fetchMessages(limit: 50);
-      if (!mounted) return;
-      setState(() => _items = items);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _error = userMessage(error));
-    } finally {
-      if (mounted) setState(() => _loading = false);
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent && mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
     }
-  }
-
-  int _countOf(String key) => key == 'all'
-      ? _items.length
-      : _items.where((e) => e['tagType'] == key).length;
-
-  List<Map<String, dynamic>> get _visible => _filter == 'all'
-      ? _items
-      : _items.where((e) => e['tagType'] == _filter).toList();
-
-  Future<void> _approveAndSend(Map<String, dynamic> item) async {
-    final id = item['id'].toString();
-    final psid = (item['psid'] ?? '').toString().trim();
-    final draft = (item['aiSuggestion'] ?? '').toString().trim();
-    if (_sendingIds.contains(id) || psid.isEmpty || draft.isEmpty) return;
-
-    final text = await _confirmDialog(item, draft);
-    if (text == null || text.isEmpty) return;
-
-    setState(() => _sendingIds.add(id));
     try {
-      await widget.inboxService.approveAndSend(
-        messageRecordId: id,
-        text: text,
+      final items = await widget.handoffService.fetchCases(
+        status: 'pending_review,approved',
       );
       if (!mounted) return;
       setState(() {
-        item['tagType'] = 'replied';
-        item['aiSuggestion'] = '';
+        _cases = items;
+        _error = null;
       });
-      showAppMessage(context, 'Đã gửi tin cho khách.');
+    } catch (error) {
+      if (!mounted) return;
+      if (!silent || _cases.isEmpty) {
+        setState(() => _error = userMessage(error));
+      }
+    } finally {
+      if (!silent && mounted) setState(() => _loading = false);
+    }
+  }
+
+  List<HandoffCase> get _visible {
+    if (_filter == 'all') return _cases;
+    if (_filter == 'high') {
+      return _cases.where((c) => c.risk == 'high').toList();
+    }
+    return _cases.where((c) => c.status == _filter).toList();
+  }
+
+  int _countOf(String key) {
+    if (key == 'all') return _cases.length;
+    if (key == 'high') return _cases.where((c) => c.risk == 'high').length;
+    return _cases.where((c) => c.status == key).length;
+  }
+
+  Future<void> _approve(HandoffCase item) async {
+    if (_busyIds.contains(item.id)) return;
+    final edited = await _editDraftDialog(item);
+    if (edited == null || edited.isEmpty) return;
+
+    setState(() => _busyIds.add(item.id));
+    try {
+      await widget.handoffService.approveCase(
+        id: item.id,
+        draftReply: edited,
+      );
+      if (!mounted) return;
+      showAppMessage(context, 'Đã duyệt ca tư vấn (chưa gửi đi).');
+      await _load(silent: true);
     } catch (error) {
       if (!mounted) return;
       showAppMessage(context, userMessage(error), isError: true);
     } finally {
-      if (mounted) setState(() => _sendingIds.remove(id));
+      if (mounted) setState(() => _busyIds.remove(item.id));
     }
   }
 
-  Future<String?> _confirmDialog(Map<String, dynamic> item, String draft) {
-    final controller = TextEditingController(text: draft);
-    final name = (item['name'] ?? 'Khách hàng').toString();
+  Future<void> _reject(HandoffCase item) async {
+    if (_busyIds.contains(item.id)) return;
+    setState(() => _busyIds.add(item.id));
+    try {
+      await widget.handoffService.rejectCase(item.id);
+      if (!mounted) return;
+      showAppMessage(context, 'Đã từ chối bản nháp.');
+      await _load(silent: true);
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(context, userMessage(error), isError: true);
+    } finally {
+      if (mounted) setState(() => _busyIds.remove(item.id));
+    }
+  }
+
+  Future<void> _send(HandoffCase item) async {
+    if (_busyIds.contains(item.id)) return;
+    setState(() => _busyIds.add(item.id));
+    try {
+      await widget.handoffService.sendCase(item.id);
+      if (!mounted) return;
+      showAppMessage(context, 'Đã gửi tin qua Messenger cho khách.');
+      await _load(silent: true);
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(context, userMessage(error), isError: true);
+    } finally {
+      if (mounted) setState(() => _busyIds.remove(item.id));
+    }
+  }
+
+  Future<String?> _editDraftDialog(HandoffCase item) {
+    final controller = TextEditingController(text: item.draftReply);
     return showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Gửi tin cho $name'),
+        title: const Text('Duyệt nội dung trả lời'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Kiểm tra nội dung trước khi gửi. Tin sẽ được gửi qua Messenger.',
+              'Kiểm tra và chỉnh sửa nội dung trước khi duyệt. Sau khi duyệt bạn mới bấm Gửi.',
               style: TextStyle(fontSize: 13, color: AppColors.textMuted),
             ),
             const SizedBox(height: 12),
@@ -112,7 +160,7 @@ class _InboxScreenState extends State<InboxScreen> {
               controller: controller,
               maxLines: 6,
               maxLength: 2000,
-              decoration: const InputDecoration(labelText: 'Nội dung tin nhắn'),
+              decoration: const InputDecoration(labelText: 'Nội dung trả lời'),
             ),
           ],
         ),
@@ -123,19 +171,11 @@ class _InboxScreenState extends State<InboxScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-            child: const Text('Gửi cho khách'),
+            child: const Text('Xác nhận duyệt'),
           ),
         ],
       ),
     ).whenComplete(controller.dispose);
-  }
-
-  void _openStudio(Map<String, dynamic> item) {
-    widget.onOpenTryOn(
-      psid: item['psid']?.toString(),
-      customerName: item['name']?.toString(),
-      pageId: item['pageId']?.toString(),
-    );
   }
 
   @override
@@ -147,15 +187,15 @@ class _InboxScreenState extends State<InboxScreen> {
         child: Column(
           children: [
             _Header(
-              onRefresh: _loading ? null : _load,
+              onRefresh: _loading ? null : () => _load(),
               onSignOut: widget.onSignOut,
               loading: _loading,
             ),
-            if (_error == null && !_loading && _items.isNotEmpty) ...[
+            if (_error == null && !_loading && _cases.isNotEmpty) ...[
               _KpiStrip(
-                total: _items.length,
-                urgent: _countOf('urgent'),
-                lead: _countOf('lead'),
+                total: _cases.length,
+                highRisk: _countOf('high'),
+                approved: _countOf('approved'),
               ),
               _FilterBar(
                 selected: _filter,
@@ -170,46 +210,61 @@ class _InboxScreenState extends State<InboxScreen> {
     );
   }
 
-  Widget _body(List<Map<String, dynamic>> visible) {
-    if (_loading && _items.isEmpty) {
+  Widget _body(List<HandoffCase> visible) {
+    if (_loading && _cases.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_error != null) {
+    if (_error != null && _cases.isEmpty) {
       return _StateView(
         icon: Icons.cloud_off_outlined,
-        title: 'Chưa tải được hội thoại',
+        title: 'Chưa tải được danh sách ca',
         message: _error,
         actionLabel: 'Thử lại',
-        onAction: _load,
+        onAction: () => _load(),
       );
     }
-    if (_items.isEmpty) {
-      return const _StateView(
-        icon: Icons.inbox_outlined,
-        title: 'Chưa có hội thoại',
-        message: 'Tin nhắn từ Fanpage của tiệm sẽ hiện ở đây.',
+    if (_cases.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: () => _load(),
+        child: ListView(
+          children: const [
+            SizedBox(height: 48),
+            _StateView(
+              icon: Icons.inbox_outlined,
+              title: 'Chưa có ca chờ duyệt',
+              message:
+                  'Ca chuyển từ Business AI hoặc ảnh chủ tiệm chụp ở Studio sẽ hiện tại đây.',
+            ),
+          ],
+        ),
       );
     }
     if (visible.isEmpty) {
       return const _StateView(
         icon: Icons.filter_alt_off_outlined,
-        title: 'Không có hội thoại trong mục này',
-        message: 'Chọn mục khác để xem thêm.',
+        title: 'Không có ca trong mục này',
+        message: 'Chọn mục lọc khác để xem thêm.',
       );
     }
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: () => _load(),
       child: ListView.separated(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
         itemCount: visible.length,
         separatorBuilder: (_, __) => const SizedBox(height: 10),
         itemBuilder: (context, index) {
           final item = visible[index];
-          return _ConversationCard(
+          return _CaseCard(
             item: item,
-            sending: _sendingIds.contains(item['id'].toString()),
-            onStudio: () => _openStudio(item),
-            onSend: () => _approveAndSend(item),
+            busy: _busyIds.contains(item.id),
+            onApprove: () => _approve(item),
+            onReject: () => _reject(item),
+            onSend: () => _send(item),
+            onStudio: () => widget.onOpenTryOn(
+              customerName: item.source == 'business_ai_handover'
+                  ? 'Khách Messenger'
+                  : 'Khách tại tiệm',
+            ),
           );
         },
       ),
@@ -256,11 +311,13 @@ class _Header extends StatelessWidget {
                   children: [
                     Text(
                       'Pyincc AI CRM',
-                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+                      style:
+                          TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
                     ),
                     Text(
                       'Hộp thư AI',
-                      style: TextStyle(fontSize: 13, color: AppColors.textMuted),
+                      style:
+                          TextStyle(fontSize: 13, color: AppColors.textMuted),
                     ),
                   ],
                 ),
@@ -294,13 +351,13 @@ class _Header extends StatelessWidget {
 class _KpiStrip extends StatelessWidget {
   const _KpiStrip({
     required this.total,
-    required this.urgent,
-    required this.lead,
+    required this.highRisk,
+    required this.approved,
   });
 
   final int total;
-  final int urgent;
-  final int lead;
+  final int highRisk;
+  final int approved;
 
   @override
   Widget build(BuildContext context) {
@@ -309,18 +366,14 @@ class _KpiStrip extends StatelessWidget {
       child: Row(
         children: [
           _KpiTile(
-            label: 'Tổng hội thoại',
+            label: 'Chờ xử lý',
             value: total,
             color: AppColors.primaryDark,
           ),
           const SizedBox(width: 10),
-          _KpiTile(label: 'Cần xử lý', value: urgent, color: AppColors.danger),
+          _KpiTile(label: 'Rủi ro cao', value: highRisk, color: AppColors.danger),
           const SizedBox(width: 10),
-          _KpiTile(
-            label: 'Hỏi giá & lịch',
-            value: lead,
-            color: const Color(0xFFEF6C00),
-          ),
+          _KpiTile(label: 'Đã duyệt', value: approved, color: AppColors.success),
         ],
       ),
     );
@@ -386,10 +439,9 @@ class _FilterBar extends StatelessWidget {
 
   static const _filters = <(String, String)>[
     ('all', 'Tất cả'),
-    ('urgent', 'Cần xử lý'),
-    ('lead', 'Hỏi giá & lịch'),
-    ('image', 'Gửi ảnh'),
-    ('replied', 'Đã phản hồi'),
+    ('pending_review', 'Chờ duyệt'),
+    ('approved', 'Đã duyệt'),
+    ('high', 'Rủi ro cao'),
   ];
 
   @override
@@ -403,10 +455,9 @@ class _FilterBar extends StatelessWidget {
         separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final (key, label) = _filters[index];
-          final isSelected = key == selected;
           return ChoiceChip(
             label: Text('$label (${countOf(key)})'),
-            selected: isSelected,
+            selected: key == selected,
             onSelected: (_) => onChanged(key),
           );
         },
@@ -415,29 +466,50 @@ class _FilterBar extends StatelessWidget {
   }
 }
 
-class _ConversationCard extends StatelessWidget {
-  const _ConversationCard({
+class _CaseCard extends StatelessWidget {
+  const _CaseCard({
     required this.item,
-    required this.sending,
-    required this.onStudio,
+    required this.busy,
+    required this.onApprove,
+    required this.onReject,
     required this.onSend,
+    required this.onStudio,
   });
 
-  final Map<String, dynamic> item;
-  final bool sending;
-  final VoidCallback onStudio;
+  final HandoffCase item;
+  final bool busy;
+  final VoidCallback onApprove;
+  final VoidCallback onReject;
   final VoidCallback onSend;
+  final VoidCallback onStudio;
+
+  Color get _riskColor {
+    switch (item.risk) {
+      case 'high':
+        return AppColors.danger;
+      case 'medium':
+        return const Color(0xFFEF6C00);
+      default:
+        return AppColors.success;
+    }
+  }
+
+  String get _riskLabel {
+    switch (item.risk) {
+      case 'high':
+        return 'Rủi ro cao';
+      case 'medium':
+        return 'Rủi ro trung bình';
+      default:
+        return 'Rủi ro thấp';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final name = (item['name'] ?? 'Khách hàng').toString();
-    final summary = (item['summary'] ?? '').toString();
-    final imageUrl = (item['imageUrl'] ?? '').toString();
-    final draft = (item['aiSuggestion'] ?? '').toString().trim();
-    final type = (item['tagType'] ?? 'normal').toString();
-    final tag = _tagStyles[type] ?? _tagStyles['normal']!;
-    final canSend =
-        draft.isNotEmpty && (item['psid'] ?? '').toString().isNotEmpty;
+    final sourceLabel = item.source == 'business_ai_handover'
+        ? 'Business AI chuyển ca'
+        : 'Chủ tiệm chụp tại tiệm';
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -451,21 +523,9 @@ class _ConversationCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              CircleAvatar(
-                radius: 18,
-                backgroundColor: tag.color.withValues(alpha: 0.12),
-                child: Text(
-                  name.isNotEmpty ? name[0].toUpperCase() : '?',
-                  style: TextStyle(
-                    color: tag.color,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  name,
+                  sourceLabel,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -474,36 +534,41 @@ class _ConversationCard extends StatelessWidget {
                   ),
                 ),
               ),
-              _TagChip(label: tag.label, color: tag.color),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _riskColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _riskLabel,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: _riskColor,
+                  ),
+                ),
+              ),
             ],
           ),
-          const SizedBox(height: 10),
-          if (summary.isNotEmpty)
+          if (item.summary.isNotEmpty) ...[
+            const SizedBox(height: 8),
             Text(
-              summary,
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
+              item.summary,
               style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
             ),
-          if (imageUrl.isNotEmpty) ...[
+          ],
+          if (item.imageUrl.isNotEmpty) ...[
             const SizedBox(height: 10),
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
               child: Image.network(
-                imageUrl,
+                item.imageUrl,
                 height: 160,
                 width: double.infinity,
                 fit: BoxFit.cover,
-                loadingBuilder: (context, child, progress) => progress == null
-                    ? child
-                    : Container(
-                        height: 160,
-                        color: AppColors.surface,
-                        alignment: Alignment.center,
-                        child: const CircularProgressIndicator(strokeWidth: 2),
-                      ),
                 errorBuilder: (_, __, ___) => Container(
-                  height: 160,
+                  height: 120,
                   color: AppColors.surface,
                   alignment: Alignment.center,
                   child: const Text(
@@ -514,7 +579,7 @@ class _ConversationCard extends StatelessWidget {
               ),
             ),
           ],
-          if (draft.isNotEmpty) ...[
+          if (item.draftReply.isNotEmpty) ...[
             const SizedBox(height: 10),
             Container(
               width: double.infinity,
@@ -526,9 +591,11 @@ class _ConversationCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Nội dung đề xuất',
-                    style: TextStyle(
+                  Text(
+                    item.status == 'approved'
+                        ? 'Nội dung đã duyệt (sẵn sàng gửi)'
+                        : 'Nội dung nháp AI đề xuất',
+                    style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                       color: AppColors.textMuted,
@@ -536,9 +603,7 @@ class _ConversationCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    draft,
-                    maxLines: 4,
-                    overflow: TextOverflow.ellipsis,
+                    item.draftReply,
                     style: const TextStyle(
                       fontSize: 13,
                       color: AppColors.textPrimary,
@@ -549,19 +614,24 @@ class _ConversationCard extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.end,
             children: [
-              if (imageUrl.isNotEmpty)
-                TextButton(
-                  onPressed: onStudio,
-                  child: const Text('Mở Studio'),
+              TextButton(
+                onPressed: busy ? null : onReject,
+                child: const Text('Từ chối'),
+              ),
+              if (item.status == 'pending_review')
+                OutlinedButton(
+                  onPressed: busy ? null : onApprove,
+                  child: const Text('Duyệt'),
                 ),
-              const SizedBox(width: 8),
-              if (canSend)
+              if (item.canSend)
                 FilledButton(
-                  onPressed: sending ? null : onSend,
-                  child: sending
+                  onPressed: busy ? null : onSend,
+                  child: busy
                       ? const SizedBox(
                           width: 16,
                           height: 16,
@@ -570,37 +640,11 @@ class _ConversationCard extends StatelessWidget {
                             color: Colors.white,
                           ),
                         )
-                      : const Text('Duyệt & gửi'),
+                      : const Text('Gửi'),
                 ),
             ],
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _TagChip extends StatelessWidget {
-  const _TagChip({required this.label, required this.color});
-
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          color: color,
-        ),
       ),
     );
   }
@@ -658,18 +702,3 @@ class _StateView extends StatelessWidget {
     );
   }
 }
-
-class _TagStyle {
-  const _TagStyle(this.label, this.color);
-
-  final String label;
-  final Color color;
-}
-
-const Map<String, _TagStyle> _tagStyles = {
-  'urgent': _TagStyle('Cần xử lý', Color(0xFFC62828)),
-  'lead': _TagStyle('Hỏi giá & lịch', Color(0xFFEF6C00)),
-  'image': _TagStyle('Gửi ảnh', Color(0xFF1565C0)),
-  'replied': _TagStyle('Đã phản hồi', Color(0xFF2E7D32)),
-  'normal': _TagStyle('Tin mới', Color(0xFF7A6470)),
-};

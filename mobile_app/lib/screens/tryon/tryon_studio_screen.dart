@@ -8,7 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/errors/image_prepare_exception.dart';
 import '../../core/errors/user_message.dart';
 import '../../core/theme/app_theme.dart';
-import '../../services/tryon_image_service.dart';
+import '../../services/handoff_service.dart';
 
 class _Item {
   const _Item(this.id, this.name, this.category);
@@ -27,12 +27,12 @@ const _catalog = <_Item>[
 class TryOnStudioScreen extends StatefulWidget {
   const TryOnStudioScreen({
     super.key,
-    this.authToken = '',
+    required this.handoffService,
     this.customerName,
     this.onSignOut,
   });
 
-  final String authToken;
+  final HandoffService handoffService;
   final String? customerName;
   final VoidCallback? onSignOut;
 
@@ -42,13 +42,13 @@ class TryOnStudioScreen extends StatefulWidget {
 
 class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   final _picker = ImagePicker();
-  late final _service = TryOnImageService(authToken: widget.authToken);
 
   File? _image;
-  FaceAnalysis? _analysis;
+  HandoffCase? _caseResult;
   String _filter = 'all';
   String? _selectedId;
   bool _busy = false;
+  bool _approved = false;
 
   List<_Item> get _visible => _filter == 'all'
       ? _catalog
@@ -72,7 +72,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     if (picked == null || !mounted) return;
     final path = picked.path;
     if (!await _confirmConsent()) return;
-    await _analyze(File(path));
+    await _capture(File(path));
   }
 
   Future<bool> _confirmConsent() async {
@@ -81,7 +81,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Xác nhận trước khi phân tích'),
         content: const Text(
-          'Ảnh khách sẽ được gửi để phân tích dáng mặt và tông da. '
+          'Ảnh khách sẽ được gửi lên máy chủ để phân tích dáng mặt và tư vấn nội bộ. '
           'Chỉ tiếp tục khi khách đã đồng ý.',
         ),
         actions: [
@@ -99,17 +99,18 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     return ok ?? false;
   }
 
-  Future<void> _analyze(File file) async {
+  Future<void> _capture(File file) async {
     setState(() {
       _image = file;
-      _analysis = null;
+      _caseResult = null;
+      _approved = false;
       _busy = true;
     });
     try {
-      final result = await _service.analyzeFace(file);
+      final result = await widget.handoffService.captureCase(file);
       if (!mounted) return;
       setState(() {
-        _analysis = result;
+        _caseResult = result;
         final rec = result.recommendedItemId;
         if (result.faceDetected &&
             rec != null &&
@@ -127,20 +128,41 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     }
   }
 
+  Future<void> _approveCurrentCase() async {
+    final c = _caseResult;
+    if (c == null || _busy || c.draftReply.trim().isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      await widget.handoffService.approveCase(
+        id: c.id,
+        draftReply: c.draftReply,
+      );
+      if (!mounted) return;
+      setState(() => _approved = true);
+      showAppMessage(context, 'Đã duyệt ca tư vấn (chưa gửi đi).');
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(context, userMessage(error), isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   void _reset() => setState(() {
         _image = null;
-        _analysis = null;
+        _caseResult = null;
         _selectedId = null;
+        _approved = false;
       });
 
   Future<void> _copyNote() async {
-    final note = _analysis?.consultationNote ?? '';
+    final note = _caseResult?.draftReply ?? '';
     if (note.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: note));
     if (mounted) {
       showAppMessage(
         context,
-        'Đã sao chép. Dán vào hộp thư để nhân viên chỉnh sửa trước khi gửi.',
+        'Đã sao chép gợi ý để nhân viên kiểm tra trước khi tư vấn.',
       );
     }
   }
@@ -188,7 +210,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
             const SizedBox(height: 8),
             _imageArea(),
             const SizedBox(height: 12),
-            _resultCard(_analysis),
+            _resultCard(_caseResult),
             const SizedBox(height: 12),
             _catalogSection(),
             const SizedBox(height: 16),
@@ -266,12 +288,12 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     );
   }
 
-  Widget _resultCard(FaceAnalysis? a) {
+  Widget _resultCard(HandoffCase? c) {
     if (_image == null) return const SizedBox.shrink();
-    if (a == null) {
-      return const _Card(child: Text('Đang phân tích dáng mặt...'));
+    if (c == null) {
+      return const _Card(child: Text('Đang phân tích ca tư vấn...'));
     }
-    if (!a.faceDetected) {
+    if (!c.faceDetected) {
       return const _Card(
         child: Text(
           'Chưa nhận diện được khuôn mặt. Vui lòng chụp lại ảnh rõ mặt, nhìn thẳng vào camera.',
@@ -282,30 +304,37 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Dáng mặt: ${a.faceShape.isEmpty ? 'Chưa xác định' : a.faceShape}',
-          ),
-          const SizedBox(height: 2),
-          Text(
-            'Tông da: ${a.skinTone.isEmpty ? 'Chưa xác định' : a.skinTone}',
-          ),
-          if (a.observations.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(a.observations),
+          if (c.summary.isNotEmpty) ...[
+            Text(
+              'Tóm tắt: ${c.summary}',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
           ],
-          if (a.consultationNote.isNotEmpty) ...[
+          Text('Mức rủi ro: ${c.risk}'),
+          if (c.draftReply.isNotEmpty) ...[
             const SizedBox(height: 10),
             const Text(
               'Gợi ý tham khảo',
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 4),
-            Text(a.consultationNote),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: _copyNote,
-              icon: const Icon(Icons.copy, size: 16),
-              label: const Text('Sao chép gợi ý'),
+            Text(c.draftReply),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _copyNote,
+                  icon: const Icon(Icons.copy, size: 16),
+                  label: const Text('Sao chép gợi ý'),
+                ),
+                FilledButton(
+                  onPressed: (_busy || _approved) ? null : _approveCurrentCase,
+                  child: Text(_approved ? 'Đã duyệt' : 'Duyệt'),
+                ),
+              ],
             ),
           ],
         ],

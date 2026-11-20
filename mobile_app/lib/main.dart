@@ -8,6 +8,7 @@ import 'screens/tryon/tryon_studio_screen.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
 import 'services/facebook_connect_service.dart';
+import 'services/handoff_service.dart';
 import 'services/inbox_service.dart';
 
 void main() {
@@ -311,13 +312,13 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
     authToken: widget.authToken,
   );
 
+  late final HandoffService _handoffService = HandoffService(
+    _inboxService.apiClient,
+  );
+
   String? _activeTryOnCustomerName;
 
-  void _openTryOnTab({
-    String? psid,
-    String? customerName,
-    String? pageId,
-  }) {
+  void _openTryOnTab({String? customerName}) {
     setState(() {
       _activeTryOnCustomerName = customerName;
       _selectedIndex = 1;
@@ -331,12 +332,12 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
         index: _selectedIndex,
         children: [
           InboxScreen(
-            inboxService: _inboxService,
+            handoffService: _handoffService,
             onOpenTryOn: _openTryOnTab,
             onSignOut: widget.onSignOut,
           ),
           TryOnStudioScreen(
-            authToken: widget.authToken,
+            handoffService: _handoffService,
             customerName: _activeTryOnCustomerName,
             onSignOut: widget.onSignOut,
           ),
