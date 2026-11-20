@@ -25,3 +25,11 @@ flutter:
   assets:
     - assets_icon_1024.png
     - assets/brand/
+
+flutter_native_splash:
+  color: "#FFF5F5"
+  image: assets/brand/splash.png
+  android_12:
+    image: assets/brand/splash.png
+    color: "#FFF5F5"
+    icon_background_color: "#FFF5F5"
