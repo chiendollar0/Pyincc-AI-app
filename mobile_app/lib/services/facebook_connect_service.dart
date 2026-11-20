@@ -7,8 +7,12 @@ class FacebookConnectService {
 
   final ApiClient api;
 
-  // Giai đoạn 1 chỉ xin quyền đọc danh sách Fanpage; pages_messaging thuộc giai đoạn 2.
-  static const List<String> _permissions = ['public_profile', 'pages_show_list'];
+  static const List<String> _permissions = [
+    'public_profile',
+    'pages_show_list',
+    'pages_messaging',
+    'pages_manage_metadata',
+  ];
 
   /// Gửi user token ngắn hạn 1 lần cho máy chủ đổi sang page token mã hóa và xóa ngay khỏi app.
   Future<List<Map<String, dynamic>>> connect() async {

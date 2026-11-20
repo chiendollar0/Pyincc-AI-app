@@ -1006,7 +1006,8 @@ async function handleFacebookMessage(orgId, pageId, event, message) {
 
   if (uploaded) {
     const { error: mediaError } = await supabase.from('customer_media').upsert({
-      org_id: orgId, page_id: pageId || null, source_channel: 'facebook', source_message_id: messageId,
+      org_id: orgId, page_id: pageId || null, recipient_psid: senderPsid || null,
+      source_channel: 'facebook', source_message_id: messageId,
       source_url: null, storage_url: null, storage_path: uploaded.path,
       file_name: uploaded.path, mime_type: uploaded.mimeType, file_size: uploaded.size,
       approval_status: 'pending', uploaded_at: new Date().toISOString(),
