@@ -587,6 +587,7 @@ app.post('/messages/:id/approve', writeLimiter, requireAuth, requireRole('owner'
   const { data, error } = await supabase.from('conversation_messages').update({ draft_reply: draftReply,
     approval_status: 'approved', approved_by: req.authUser.id, approved_at: approvedAt })
     .eq('id', messageRowId).eq('org_id', req.orgId)
+    .in('approval_status', ['pending', 'approved'])
     .select('id, org_id, customer_psid, draft_reply, approval_status, approved_by, approved_at').single();
   if (error || !data) return res.status(404).json({ error: 'Message record not found in your organization' });
   return res.json({ success: true, approval: data });

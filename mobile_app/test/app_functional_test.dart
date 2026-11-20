@@ -65,7 +65,7 @@ void main() {
       // Switch to Tab 2: Studio AI
       await tester.tap(find.text('Studio AI').last);
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('Chưa có ảnh mặt mộc của khách'), findsOneWidget);
+      expect(find.text('Chọn ảnh mặt mộc của khách'), findsOneWidget);
 
       await tester.tap(find.widgetWithText(ChoiceChip, 'Môi'));
       await tester.pump();

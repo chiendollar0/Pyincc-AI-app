@@ -1,11 +1,40 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
 import 'api_client.dart';
 import 'image_preprocessor.dart';
+
+class FaceAnalysis {
+  const FaceAnalysis({
+    required this.faceDetected,
+    this.faceShape = '',
+    this.skinTone = '',
+    this.observations = '',
+    this.recommendedItemId,
+    this.consultationNote = '',
+  });
+
+  final bool faceDetected;
+  final String faceShape;
+  final String skinTone;
+  final String observations;
+  final String? recommendedItemId;
+  final String consultationNote;
+
+  factory FaceAnalysis.fromJson(Map<String, dynamic> j) => FaceAnalysis(
+        faceDetected: j['face_detected'] == true,
+        faceShape: (j['face_shape'] ?? '').toString(),
+        skinTone: (j['skin_tone'] ?? '').toString(),
+        observations: (j['observations'] ?? '').toString(),
+        recommendedItemId: j['recommended_item_id']?.toString(),
+        consultationNote: (j['consultation_note'] ??
+                j['consultation_script'] ??
+                '')
+            .toString(),
+      );
+}
 
 class TryOnImageService {
   static const String _supabaseUrl = String.fromEnvironment(
@@ -13,47 +42,24 @@ class TryOnImageService {
     defaultValue: 'https://ihufvqrxdswgbagzhydb.supabase.co',
   );
 
-  final String apiBaseUrl;
+  const TryOnImageService({this.authToken = ''});
+
   final String authToken;
 
-  TryOnImageService({
-    required this.apiBaseUrl,
-    this.authToken = const String.fromEnvironment(
-      'BACKEND_AUTH_TOKEN',
-      defaultValue: '',
-    ),
-  });
+  /// Chuẩn hóa ảnh trên máy, rồi gọi Edge Function tryon-analyze bằng JWT người dùng.
+  Future<FaceAnalysis> analyzeFace(File image) async {
+    final baseSupabaseUrl = _supabaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final url = Uri.parse('$baseSupabaseUrl/functions/v1/tryon-analyze');
 
-  ApiClient get _api => ApiClient(
-        baseUrl: apiBaseUrl,
-        authToken: authToken,
-      );
+    final bytes = await ImagePreprocessor.prepare(image);
+    if (bytes.isEmpty) {
+      throw const ApiException(0, 'Ảnh mặt khách rỗng hoặc không đọc được.');
+    }
 
-  Map<String, String> _jsonHeaders() {
     final headers = <String, String>{'Content-Type': 'application/json'};
     final token = authToken.trim();
     if (token.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';
-    }
-    return headers;
-  }
-
-  Future<Map<String, dynamic>> analyzeFace({
-    required File image,
-    required List<Map<String, dynamic>> catalog,
-  }) async {
-    final baseSupabaseUrl = _supabaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    final url = Uri.parse('$baseSupabaseUrl/functions/v1/tryon-analyze');
-
-    final Uint8List bytes;
-    try {
-      bytes = await ImagePreprocessor.prepare(image);
-    } on ImagePrepareException catch (err) {
-      throw ApiException(0, err.message);
-    }
-
-    if (bytes.isEmpty) {
-      throw const ApiException(0, 'Ảnh mặt khách rỗng hoặc không đọc được.');
     }
 
     late final http.Response response;
@@ -61,144 +67,29 @@ class TryOnImageService {
       response = await http
           .post(
             url,
-            headers: _jsonHeaders(),
-            body: jsonEncode({
-              'image_base64': base64Encode(bytes),
-              'catalog': catalog,
-            }),
+            headers: headers,
+            body: jsonEncode({'image_base64': base64Encode(bytes)}),
           )
           .timeout(const Duration(seconds: 30));
     } on SocketException {
       throw const SocketException('analyze_network_unreachable');
     }
 
-    if (response.statusCode == 413) {
-      throw const ApiException(
-        0,
-        'Ảnh quá lớn. Vui lòng chụp lại ở độ phân giải thấp hơn.',
-      );
-    }
-    if (response.statusCode == 415) {
-      throw const ApiException(
-        0,
-        'Định dạng ảnh không được hỗ trợ. Vui lòng chọn ảnh JPEG, PNG hoặc WebP.',
-      );
-    }
     if (response.statusCode != 200) {
-      throw ApiException(response.statusCode, 'Chưa thể phân tích khuôn mặt.');
+      throw ApiException(response.statusCode, 'Phân tích ảnh thất bại.');
     }
 
     final decoded = jsonDecode(response.body);
-    if (decoded is! Map<String, dynamic>) {
-      throw const ApiException(0, 'Dữ liệu phân tích không đúng định dạng.');
+    if (decoded is! Map) {
+      throw const FormatException('Phản hồi phân tích không hợp lệ.');
     }
 
-    if (decoded['analysis'] is Map) {
-      return Map<String, dynamic>.from(decoded['analysis'] as Map);
-    }
-    if (decoded.containsKey('face_detected')) {
-      return decoded;
-    }
-
-    throw const ApiException(0, 'Dữ liệu phân tích không đúng định dạng.');
-  }
-
-  Future<Uint8List> generatePreview({
-    required File image,
-    required String category,
-    required String prompt,
-  }) async {
-    final Uint8List bytes;
-    try {
-      bytes = await ImagePreprocessor.prepare(image);
-    } on ImagePrepareException catch (err) {
-      throw ApiException(0, err.message);
-    }
-
-    if (bytes.isEmpty) {
-      throw const ApiException(0, 'Ảnh mặt khách rỗng hoặc không đọc được.');
-    }
-
-    final data = await _api.post(
-      '/api/tryon/generate',
-      {
-        'image_base64': base64Encode(bytes),
-        'category': category,
-        'prompt': prompt,
-      },
-      timeout: const Duration(seconds: 90),
-    );
-
-    final result = data['result_base64'];
-    if (result is! String || result.isEmpty) {
-      throw const ApiException(0, 'Chưa nhận được ảnh mô phỏng từ máy chủ.');
-    }
-
-    try {
-      return base64Decode(result);
-    } on FormatException {
-      throw const ApiException(0, 'Ảnh mô phỏng trả về không hợp lệ.');
-    }
-  }
-
-  Future<Map<String, dynamic>> sendApprovedPreview({
-    required Uint8List imageBytes,
-    required String recipientId,
-    required String caption,
-    String? pageId,
-  }) async {
-    if (imageBytes.isEmpty) {
-      throw const ApiException(0, 'Chưa có ảnh mô phỏng AI để gửi.');
-    }
-    final cleanRecipient = recipientId.trim();
-    if (cleanRecipient.isEmpty) {
-      throw const ApiException(
-        0,
-        'Vui lòng chọn hội thoại khách hàng hoặc nhập mã khách hàng trước khi gửi.',
+    final map = Map<String, dynamic>.from(decoded);
+    if (map['analysis'] is Map) {
+      return FaceAnalysis.fromJson(
+        Map<String, dynamic>.from(map['analysis'] as Map),
       );
     }
-    final cleanPageId = (pageId ?? '').trim();
-
-    // Bước 1: Tạo bản nháp ở trạng thái pending
-    final draftPayload = <String, dynamic>{
-      'recipientId': cleanRecipient,
-      'imageBase64': base64Encode(imageBytes),
-      'caption': caption.trim(),
-    };
-    if (cleanPageId.isNotEmpty) {
-      draftPayload['pageId'] = cleanPageId;
-    }
-    final draftRes = await _api.post(
-      '/tryon-drafts',
-      draftPayload,
-      timeout: const Duration(seconds: 30),
-    );
-
-    final media = draftRes['media'];
-    final mediaRecordId =
-        media is Map<String, dynamic> ? (media['id'] ?? '').toString() : '';
-    if (mediaRecordId.isEmpty) {
-      throw const ApiException(0, 'Chưa lưu được bản nháp duyệt ảnh.');
-    }
-
-    // Bước 2: Nhân viên duyệt tường minh (pending -> approved)
-    await _api.post(
-      '/tryon-drafts/${Uri.encodeComponent(mediaRecordId)}/approve',
-      {'caption': caption.trim()},
-      timeout: const Duration(seconds: 15),
-    );
-
-    // Bước 3: Máy chủ kiểm tra approved + recipientId + Fanpage rồi mới gửi
-    final sendPayload = <String, dynamic>{
-      'mediaRecordId': mediaRecordId,
-    };
-    if (cleanPageId.isNotEmpty) {
-      sendPayload['pageId'] = cleanPageId;
-    }
-    return _api.post(
-      '/send-tryon-image',
-      sendPayload,
-      timeout: const Duration(seconds: 30),
-    );
+    return FaceAnalysis.fromJson(map);
   }
 }

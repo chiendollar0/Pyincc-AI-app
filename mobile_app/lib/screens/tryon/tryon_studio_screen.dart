@@ -1,637 +1,368 @@
 // ignore_for_file: deprecated_member_use
 import 'dart:io';
-import 'dart:typed_data';
 
-import 'package:before_after/before_after.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/errors/image_prepare_exception.dart';
 import '../../core/errors/user_message.dart';
 import '../../core/theme/app_theme.dart';
 import '../../services/tryon_image_service.dart';
 
-class TryOnStudioScreen extends StatefulWidget {
-  final String apiBaseUrl;
-  final String authToken;
-  final String? customerPsid;
-  final String? customerName;
-  final String? pageId;
-  final VoidCallback? onSignOut;
+class _Item {
+  const _Item(this.id, this.name, this.category);
+  final String id;
+  final String name;
+  final String category; // 'eyebrow' | 'lip'
+}
 
+const _catalog = <_Item>[
+  _Item('1', 'Mày sợi Hairstroke Nâu Tây', 'eyebrow'),
+  _Item('2', 'Mày Shading Ombre', 'eyebrow'),
+  _Item('3', 'Môi Collagen Cam Đào', 'lip'),
+  _Item('4', 'Môi Khử Thâm Hồng Baby', 'lip'),
+];
+
+class TryOnStudioScreen extends StatefulWidget {
   const TryOnStudioScreen({
     super.key,
-    required this.apiBaseUrl,
     this.authToken = '',
-    this.customerPsid,
     this.customerName,
-    this.pageId,
     this.onSignOut,
   });
+
+  final String authToken;
+  final String? customerName;
+  final VoidCallback? onSignOut;
 
   @override
   State<TryOnStudioScreen> createState() => _TryOnStudioScreenState();
 }
 
 class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
-  static const bool _enableTryOnGenerate = bool.fromEnvironment(
-    'ENABLE_TRYON_GENERATE',
-    defaultValue: false,
-  );
+  final _picker = ImagePicker();
+  late final _service = TryOnImageService(authToken: widget.authToken);
 
-  final ImagePicker _picker = ImagePicker();
+  File? _image;
+  FaceAnalysis? _analysis;
+  String _filter = 'all';
+  String? _selectedId;
+  bool _busy = false;
 
-  File? _originalImage;
-  Uint8List? _aiResultBytes;
-  bool _isBusy = false;
-  double _sliderPosition = 0.5;
-  String _categoryFilter = 'all';
-  String _faceSummary = 'Chưa có ảnh';
-  String _note =
-      'Tải ảnh mặt mộc từ thư viện hoặc chụp trực tiếp để AI phân tích dáng mặt và gợi ý mẫu phù hợp.';
-  String _selectedId = '1';
+  List<_Item> get _visible => _filter == 'all'
+      ? _catalog
+      : _catalog.where((e) => e.category == _filter).toList();
 
-  static const List<Map<String, dynamic>> _catalog = [
-    {
-      'id': '1',
-      'name': 'Mày sợi Hairstroke Nâu Tây',
-      'category': 'eyebrow',
-      'price': '3.500.000đ',
-      'prompt': 'natural hairstroke eyebrows, soft dark brown',
-    },
-    {
-      'id': '2',
-      'name': 'Mày Shading Ombre',
-      'category': 'eyebrow',
-      'price': '2.800.000đ',
-      'prompt': 'soft powder ombre shading eyebrows, espresso brown',
-    },
-    {
-      'id': '3',
-      'name': 'Môi Collagen Cam Đào',
-      'category': 'lip',
-      'price': '4.000.000đ',
-      'prompt': 'glossy peach coral lips, natural lip blush',
-    },
-    {
-      'id': '4',
-      'name': 'Môi Khử Thâm Hồng Baby',
-      'category': 'lip',
-      'price': '3.800.000đ',
-      'prompt': 'soft baby pink natural lips',
-    },
-  ];
-
-  List<Map<String, dynamic>> get _filteredCatalog {
-    if (_categoryFilter == 'all') return _catalog;
-    return _catalog
-        .where((item) => item['category'] == _categoryFilter)
-        .toList();
-  }
-
-  Map<String, dynamic>? get _selectedItem {
-    for (final item in _catalog) {
-      if (item['id'] == _selectedId) return item;
-    }
-    return null;
-  }
-
-  bool _isUnrecognizedFace(Map<String, dynamic> analysis) {
-    if (analysis.containsKey('face_detected')) {
-      return analysis['face_detected'] != true;
-    }
-    final faceShape = (analysis['face_shape'] ?? '').toString().toLowerCase();
-    final skinTone = (analysis['skin_tone'] ?? '').toString().toLowerCase();
-    return faceShape.contains('không thể xác định') ||
-        faceShape.contains('không xác định') ||
-        skinTone.contains('không thể xác định') ||
-        skinTone.contains('không xác định');
-  }
-
-  Future<void> _pickImage(ImageSource source) async {
-    if (_isBusy) return;
+  Future<void> _pick(ImageSource source) async {
+    if (_busy) return;
     XFile? picked;
     try {
-      picked = await _picker.pickImage(source: source, imageQuality: 85);
+      picked = await _picker.pickImage(source: source, imageQuality: 90);
     } catch (_) {
-      if (!mounted) return;
-      showAppMessage(
-        context,
-        'Không mở được thư viện ảnh hoặc máy ảnh. Vui lòng kiểm tra quyền truy cập.',
-        isError: true,
-      );
+      if (mounted) {
+        showAppMessage(
+          context,
+          'Không mở được ảnh. Vui lòng kiểm tra quyền truy cập.',
+          isError: true,
+        );
+      }
       return;
     }
-
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
     final path = picked.path;
-
-    setState(() {
-      _originalImage = File(path);
-      _aiResultBytes = null;
-      _isBusy = true;
-      _faceSummary = 'Đang phân tích...';
-      _note = 'AI đang nhận diện dáng mặt và tông da của khách...';
-    });
-
-    try {
-      final service = TryOnImageService(
-        apiBaseUrl: widget.apiBaseUrl,
-        authToken: widget.authToken,
-      );
-      final analysis = await service.analyzeFace(
-        image: _originalImage!,
-        catalog: _catalog,
-      );
-
-      if (!mounted) return;
-
-      if (_isUnrecognizedFace(analysis)) {
-        setState(() {
-          _faceSummary = 'Chưa nhận diện được khuôn mặt';
-          _note =
-              'Chưa nhận diện được khuôn mặt. Vui lòng chụp lại ảnh rõ mặt, nhìn thẳng vào camera.';
-        });
-        return;
-      }
-
-      final suggestedId = analysis['recommended_item_id']?.toString();
-      final validIds = _catalog.map((e) => e['id']).toSet();
-      if (suggestedId != null && validIds.contains(suggestedId)) {
-        _selectedId = suggestedId;
-      }
-
-      final faceShape = (analysis['face_shape'] ?? 'Cân đối').toString().trim();
-      final skinTone = (analysis['skin_tone'] ?? 'Tự nhiên').toString().trim();
-      final script = (analysis['consultation_note'] ??
-              analysis['consultation_script'] ??
-              analysis['observations'] ??
-              '')
-          .toString()
-          .trim();
-
-      setState(() {
-        _faceSummary = 'Mặt: $faceShape • Da: $skinTone';
-        _note = script.isNotEmpty
-            ? script
-            : 'Đã gợi ý mẫu phù hợp nhất trong danh mục của tiệm.';
-      });
-    } catch (error) {
-      if (!mounted) return;
-      final friendly = userMessage(error);
-      setState(() {
-        _faceSummary = 'Đã tải ảnh khách';
-        _note = '$friendly Bạn vẫn có thể chọn mẫu bên dưới.';
-      });
-      showAppMessage(context, friendly, isError: true);
-    } finally {
-      if (mounted) setState(() => _isBusy = false);
-    }
+    if (!await _confirmConsent()) return;
+    await _analyze(File(path));
   }
 
-  Future<void> _generatePreview() async {
-    if (_isBusy) return;
-    final image = _originalImage;
-    final item = _selectedItem;
-    if (image == null || item == null) return;
-
-    setState(() => _isBusy = true);
-    try {
-      final service = TryOnImageService(
-        apiBaseUrl: widget.apiBaseUrl,
-        authToken: widget.authToken,
-      );
-      final bytes = await service.generatePreview(
-        image: image,
-        category: item['category'] as String,
-        prompt: item['prompt'] as String,
-      );
-      if (!mounted) return;
-      setState(() => _aiResultBytes = bytes);
-    } catch (error) {
-      if (!mounted) return;
-      showAppMessage(context, userMessage(error), isError: true);
-    } finally {
-      if (mounted) setState(() => _isBusy = false);
-    }
-  }
-
-  String _maskPsid(String psid) {
-    final trimmed = psid.trim();
-    if (trimmed.length <= 4) return trimmed;
-    return '...${trimmed.substring(trimmed.length - 4)}';
-  }
-
-  Future<void> _approveAndSendToCustomer() async {
-    if (_isBusy) return;
-    final bytes = _aiResultBytes;
-    final item = _selectedItem;
-    if (bytes == null || item == null) return;
-
-    final fixedPsid = (widget.customerPsid ?? '').trim();
-    final hasFixedPsid = fixedPsid.isNotEmpty;
-    final psidCtrl = TextEditingController(text: fixedPsid);
-    final captionCtrl = TextEditingController(
-      text:
-          'Dạ em gửi chị xem trước ảnh mô phỏng mẫu ${item['name']} bên em để mình tham khảo dáng nhé ạ!',
-    );
-
-    final recipientLabel = widget.customerName != null && hasFixedPsid
-        ? '${widget.customerName} (${_maskPsid(fixedPsid)})'
-        : (hasFixedPsid ? 'Khách (${_maskPsid(fixedPsid)})' : 'khách hàng');
-
-    final confirmed = await showDialog<bool>(
+  Future<bool> _confirmConsent() async {
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Duyệt & gửi ảnh cho $recipientLabel'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (hasFixedPsid)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Text(
-                    'Người nhận cố định từ hội thoại: $recipientLabel',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textMuted,
-                    ),
-                  ),
-                )
-              else ...[
-                TextField(
-                  controller: psidCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Mã khách hàng (PSID bắt buộc)',
-                  ),
-                ),
-                const SizedBox(height: 10),
-              ],
-              TextField(
-                controller: captionCtrl,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  labelText: 'Lời nhắn gửi kèm ảnh (nhân viên kiểm duyệt)',
-                ),
-              ),
-            ],
-          ),
+        title: const Text('Xác nhận trước khi phân tích'),
+        content: const Text(
+          'Ảnh khách sẽ được gửi để phân tích dáng mặt và tông da. '
+          'Chỉ tiếp tục khi khách đã đồng ý.',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
+            onPressed: () => Navigator.pop(ctx, false),
             child: const Text('Hủy'),
           ),
-          FilledButton.icon(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            icon: const Icon(Icons.send, size: 16),
-            label: const Text('Xác nhận gửi'),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Khách đã đồng ý'),
           ),
         ],
       ),
     );
+    return ok ?? false;
+  }
 
-    if (confirmed != true) return;
-    final targetPsid = hasFixedPsid ? fixedPsid : psidCtrl.text.trim();
-    if (targetPsid.isEmpty) {
-      if (!mounted) return;
-      showAppMessage(
-        context,
-        'Vui lòng mở Studio từ hội thoại khách hoặc nhập mã khách hàng trước khi gửi.',
-        isError: true,
-      );
-      return;
-    }
-
-    setState(() => _isBusy = true);
+  Future<void> _analyze(File file) async {
+    setState(() {
+      _image = file;
+      _analysis = null;
+      _busy = true;
+    });
     try {
-      final service = TryOnImageService(
-        apiBaseUrl: widget.apiBaseUrl,
-        authToken: widget.authToken,
-      );
-      await service.sendApprovedPreview(
-        imageBytes: bytes,
-        recipientId: targetPsid,
-        caption: captionCtrl.text,
-        pageId: widget.pageId,
-      );
+      final result = await _service.analyzeFace(file);
       if (!mounted) return;
-      showAppMessage(
-        context,
-        'Đã duyệt và gửi ảnh mô phỏng qua Messenger cho khách thành công.',
-      );
+      setState(() {
+        _analysis = result;
+        final rec = result.recommendedItemId;
+        if (result.faceDetected &&
+            rec != null &&
+            _catalog.any((e) => e.id == rec)) {
+          _selectedId = rec;
+        }
+      });
     } catch (error) {
       if (!mounted) return;
-      showAppMessage(context, userMessage(error), isError: true);
+      final msg =
+          error is ImagePrepareException ? error.message : userMessage(error);
+      showAppMessage(context, msg, isError: true);
     } finally {
-      if (mounted) setState(() => _isBusy = false);
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _reset() => setState(() {
+        _image = null;
+        _analysis = null;
+        _selectedId = null;
+      });
+
+  Future<void> _copyNote() async {
+    final note = _analysis?.consultationNote ?? '';
+    if (note.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: note));
+    if (mounted) {
+      showAppMessage(
+        context,
+        'Đã sao chép. Dán vào hộp thư để nhân viên chỉnh sửa trước khi gửi.',
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final selectedItem = _selectedItem;
-
     return Scaffold(
       body: SafeArea(
-        child: Column(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
-            BrandHeader(
-              subtitle: 'Studio AI',
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.photo_library_outlined),
-                    tooltip: 'Chọn ảnh từ thư viện',
-                    onPressed:
-                        _isBusy ? null : () => _pickImage(ImageSource.gallery),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.camera_alt_outlined),
-                    tooltip: 'Chụp ảnh khách',
-                    onPressed:
-                        _isBusy ? null : () => _pickImage(ImageSource.camera),
-                  ),
-                  if (widget.onSignOut != null)
-                    IconButton(
-                      onPressed: widget.onSignOut,
-                      icon: const Icon(Icons.logout),
-                      tooltip: 'Đăng xuất',
-                    ),
-                ],
-              ),
-            ),
-            if (_isBusy) const LinearProgressIndicator(),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                child: Container(
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: AppColors.primary.withValues(alpha: 0.14),
-                    ),
-                  ),
-                  child: _originalImage == null
-                      ? Center(
-                          child: SingleChildScrollView(
-                            padding: const EdgeInsets.symmetric(
-                              vertical: 12,
-                              horizontal: 16,
-                            ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.face_retouching_natural,
-                                  size: 48,
-                                  color: AppColors.primary.withValues(alpha: 0.5),
-                                ),
-                                const SizedBox(height: 10),
-                                const Text(
-                                  'Chưa có ảnh mặt mộc của khách',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 15,
-                                    color: AppColors.textPrimary,
-                                  ),
-                                ),
-                                const SizedBox(height: 6),
-                                const Text(
-                                  'Chọn ảnh từ thư viện hoặc chụp trực tiếp để phân tích dáng mặt và mô phỏng mẫu mày/môi.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: AppColors.textMuted,
-                                  ),
-                                ),
-                                const SizedBox(height: 14),
-                                Wrap(
-                                  spacing: 10,
-                                  runSpacing: 8,
-                                  alignment: WrapAlignment.center,
-                                  children: [
-                                    FilledButton.icon(
-                                      onPressed: () =>
-                                          _pickImage(ImageSource.gallery),
-                                      icon: const Icon(Icons.add_photo_alternate),
-                                      label: const Text('Chọn ảnh thư viện'),
-                                    ),
-                                    OutlinedButton.icon(
-                                      onPressed: () =>
-                                          _pickImage(ImageSource.camera),
-                                      icon: const Icon(Icons.camera_alt),
-                                      label: const Text('Chụp ảnh'),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        )
-                      : ClipRRect(
-                          borderRadius: BorderRadius.circular(15),
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              _aiResultBytes == null
-                                  ? Image.file(
-                                      _originalImage!,
-                                      fit: BoxFit.cover,
-                                    )
-                                  : BeforeAfter(
-                                      value: _sliderPosition,
-                                      before: Image.file(
-                                        _originalImage!,
-                                        fit: BoxFit.cover,
-                                      ),
-                                      after: Image.memory(
-                                        _aiResultBytes!,
-                                        fit: BoxFit.cover,
-                                      ),
-                                      onValueChanged: (v) =>
-                                          setState(() => _sliderPosition = v),
-                                    ),
-                              Positioned(
-                                top: 10,
-                                left: 10,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.black54,
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: const Text(
-                                    'Ảnh mô phỏng bằng AI',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                ),
-              ),
-            ),
-            Container(
-              width: double.infinity,
-              margin: const EdgeInsets.symmetric(horizontal: 16),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: AppColors.primary.withValues(alpha: 0.14),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.auto_awesome,
-                        size: 16,
-                        color: AppColors.primary,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          _faceSummary,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                            color: AppColors.primaryDark,
-                          ),
-                        ),
-                      ),
-                      if (selectedItem != null)
-                        Text(
-                          'Giá niêm yết: ${selectedItem['price']}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _note,
-                    maxLines: 3,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.customerName == null
+                        ? 'Studio AI'
+                        : 'Studio AI • ${widget.customerName}',
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textPrimary,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
-                ],
-              ),
+                ),
+                IconButton(
+                  tooltip: 'Chọn ảnh',
+                  onPressed: _busy ? null : () => _pick(ImageSource.gallery),
+                  icon: const Icon(Icons.photo_library_outlined),
+                ),
+                IconButton(
+                  tooltip: 'Chụp ảnh',
+                  onPressed: _busy ? null : () => _pick(ImageSource.camera),
+                  icon: const Icon(Icons.camera_alt_outlined),
+                ),
+                if (widget.onSignOut != null)
+                  IconButton(
+                    tooltip: 'Đăng xuất',
+                    onPressed: widget.onSignOut,
+                    icon: const Icon(Icons.logout),
+                  ),
+              ],
             ),
             const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  ChoiceChip(
-                    label: const Text('Tất cả'),
-                    selected: _categoryFilter == 'all',
-                    onSelected: (_) => setState(() => _categoryFilter = 'all'),
-                  ),
-                  const SizedBox(width: 6),
-                  ChoiceChip(
-                    label: const Text('Chân mày'),
-                    selected: _categoryFilter == 'eyebrow',
-                    onSelected: (_) =>
-                        setState(() => _categoryFilter = 'eyebrow'),
-                  ),
-                  const SizedBox(width: 6),
-                  ChoiceChip(
-                    label: const Text('Môi'),
-                    selected: _categoryFilter == 'lip',
-                    onSelected: (_) => setState(() => _categoryFilter = 'lip'),
-                  ),
-                ],
-              ),
+            _imageArea(),
+            const SizedBox(height: 12),
+            _resultCard(_analysis),
+            const SizedBox(height: 12),
+            _catalogSection(),
+            const SizedBox(height: 16),
+            const Text(
+              'Kết quả chỉ là gợi ý nội bộ. Nhân viên xác nhận trước khi tư vấn cho khách.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: AppColors.textMuted),
             ),
-            const SizedBox(height: 6),
-            SizedBox(
-              height: 44,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: _filteredCatalog.length,
-                itemBuilder: (context, index) {
-                  final item = _filteredCatalog[index];
-                  final isSelected = _selectedId == item['id'];
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      label: Text('${item['name']} (${item['price']})'),
-                      selected: isSelected,
-                      onSelected: _isBusy
-                          ? null
-                          : (_) => setState(() {
-                                _selectedId = item['id'] as String;
-                                _aiResultBytes = null;
-                              }),
-                    ),
-                  );
-                },
-              ),
-            ),
-            if (_enableTryOnGenerate)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: (_originalImage == null || _isBusy)
-                            ? null
-                            : _generatePreview,
-                        icon: const Icon(Icons.auto_fix_high, size: 18),
-                        label: const Text('Tạo ảnh thử AI'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: (_aiResultBytes == null || _isBusy)
-                            ? null
-                            : _approveAndSendToCustomer,
-                        icon: const Icon(Icons.check_circle_outline, size: 18),
-                        label: const Text('Duyệt gửi khách'),
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            else
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
-                child: Text(
-                  'Studio AI hiện dùng để phân tích dáng mặt & gợi ý mẫu nội bộ. Tính năng ghép ảnh mô phỏng trực tiếp sẽ mở khi kích hoạt model.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12, color: AppColors.textMuted),
-                ),
-              ),
           ],
         ),
       ),
     );
   }
+
+  Widget _imageArea() {
+    if (_image == null) {
+      return _Card(
+        child: Column(
+          children: [
+            Icon(
+              Icons.face_retouching_natural,
+              size: 48,
+              color: AppColors.primary.withValues(alpha: 0.5),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Chọn ảnh mặt mộc của khách',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Ảnh rõ mặt, nhìn thẳng, đủ sáng.',
+              style: TextStyle(color: AppColors.textMuted, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: _busy ? null : () => _pick(ImageSource.gallery),
+              icon: const Icon(Icons.add_photo_alternate_outlined),
+              label: const Text('Chọn ảnh'),
+            ),
+          ],
+        ),
+      );
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: Stack(
+        children: [
+          Image.file(
+            _image!,
+            height: 280,
+            width: double.infinity,
+            fit: BoxFit.cover,
+          ),
+          if (_busy)
+            const Positioned.fill(
+              child: ColoredBox(
+                color: Color(0x66000000),
+                child: Center(
+                  child: CircularProgressIndicator(color: Colors.white),
+                ),
+              ),
+            ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: IconButton.filledTonal(
+              tooltip: 'Xóa ảnh',
+              onPressed: _busy ? null : _reset,
+              icon: const Icon(Icons.close),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _resultCard(FaceAnalysis? a) {
+    if (_image == null) return const SizedBox.shrink();
+    if (a == null) {
+      return const _Card(child: Text('Đang phân tích dáng mặt...'));
+    }
+    if (!a.faceDetected) {
+      return const _Card(
+        child: Text(
+          'Chưa nhận diện được khuôn mặt. Vui lòng chụp lại ảnh rõ mặt, nhìn thẳng vào camera.',
+        ),
+      );
+    }
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Dáng mặt: ${a.faceShape.isEmpty ? 'Chưa xác định' : a.faceShape}',
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Tông da: ${a.skinTone.isEmpty ? 'Chưa xác định' : a.skinTone}',
+          ),
+          if (a.observations.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(a.observations),
+          ],
+          if (a.consultationNote.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            const Text(
+              'Gợi ý tham khảo',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(a.consultationNote),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _copyNote,
+              icon: const Icon(Icons.copy, size: 16),
+              label: const Text('Sao chép gợi ý'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _catalogSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8,
+          children: [
+            for (final f in const [
+              ('all', 'Tất cả'),
+              ('eyebrow', 'Chân mày'),
+              ('lip', 'Môi'),
+            ])
+              ChoiceChip(
+                label: Text(f.$2),
+                selected: _filter == f.$1,
+                onSelected: (_) => setState(() => _filter = f.$1),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final item in _visible)
+              ChoiceChip(
+                label: Text(item.name),
+                selected: _selectedId == item.id,
+                onSelected: (_) => setState(() => _selectedId = item.id),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _Card extends StatelessWidget {
+  const _Card({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.primary.withValues(alpha: 0.12)),
+        ),
+        child: child,
+      );
 }

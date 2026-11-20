@@ -311,14 +311,7 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
     authToken: widget.authToken,
   );
 
-  late final String _studioApiBaseUrl = _firstNonEmpty(
-    const [_tryOnApiUrl, _apiBaseUrl, _webhookApiUrl],
-    InboxService.defaultBackendUrl,
-  );
-
-  String? _activeTryOnPsid;
   String? _activeTryOnCustomerName;
-  String? _activeTryOnPageId;
 
   void _openTryOnTab({
     String? psid,
@@ -326,9 +319,7 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
     String? pageId,
   }) {
     setState(() {
-      _activeTryOnPsid = psid;
       _activeTryOnCustomerName = customerName;
-      _activeTryOnPageId = (pageId ?? '').trim().isNotEmpty ? pageId!.trim() : null;
       _selectedIndex = 1;
     });
   }
@@ -345,11 +336,8 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
             onSignOut: widget.onSignOut,
           ),
           TryOnStudioScreen(
-            apiBaseUrl: _studioApiBaseUrl,
             authToken: widget.authToken,
-            customerPsid: _activeTryOnPsid,
             customerName: _activeTryOnCustomerName,
-            pageId: _activeTryOnPageId,
             onSignOut: widget.onSignOut,
           ),
           SalonOperationsHubScreen(

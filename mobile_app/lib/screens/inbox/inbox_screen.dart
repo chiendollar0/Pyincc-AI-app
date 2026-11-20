@@ -74,9 +74,8 @@ class _InboxScreenState extends State<InboxScreen> {
 
     setState(() => _sendingIds.add(id));
     try {
-      await widget.inboxService.sendMessage(
+      await widget.inboxService.approveAndSend(
         messageRecordId: id,
-        recipientId: psid,
         text: text,
       );
       if (!mounted) return;

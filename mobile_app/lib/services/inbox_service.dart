@@ -56,17 +56,16 @@ class InboxService {
         .toList();
   }
 
-  Future<void> sendMessage({
+  Future<void> approveAndSend({
     required String messageRecordId,
-    required String recipientId,
     required String text,
   }) async {
+    final id = Uri.encodeComponent(messageRecordId.trim());
     await apiClient.post(
-      '/messages/${Uri.encodeComponent(messageRecordId.trim())}/approve',
+      '/messages/$id/approve',
       {'text': text.trim()},
       timeout: const Duration(seconds: 15),
     );
-
     await apiClient.post(
       '/send-message',
       {'messageRecordId': messageRecordId.trim()},
