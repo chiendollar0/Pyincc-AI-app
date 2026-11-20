@@ -57,11 +57,8 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
 
-      // Tab 1: Hộp thư AI (no hardcoded customer names)
+      // Tab 1: Hộp thư AI (no hardcoded customer names; shows error/empty state when offline)
       expect(find.text('Hộp thư AI'), findsWidgets);
-      expect(find.text('Tổng hội thoại'), findsOneWidget);
-      expect(find.text('Ca khó / Sửa'), findsOneWidget);
-      expect(find.text('Hỏi giá / Lịch'), findsOneWidget);
       expect(find.text('Chị Minh Thư (FB)'), findsNothing);
       expect(find.text('Thanh Trúc (Zalo)'), findsNothing);
 

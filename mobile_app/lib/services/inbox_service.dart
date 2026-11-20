@@ -45,11 +45,12 @@ class InboxService {
       '/messages?limit=$limit',
       timeout: const Duration(seconds: 15),
     );
-    if (decoded['messages'] is! List) {
+    final raw = decoded['messages'];
+    if (raw == null) return const [];
+    if (raw is! List) {
       throw const ApiException(0, 'Dữ liệu hộp thư không đúng định dạng.');
     }
-    final rawList = decoded['messages'] as List;
-    return rawList
+    return raw
         .whereType<Map<String, dynamic>>()
         .map(_mapRowToTriageItem)
         .toList();
@@ -68,10 +69,7 @@ class InboxService {
 
     await apiClient.post(
       '/send-message',
-      {
-        'messageRecordId': messageRecordId.trim(),
-        'recipientId': recipientId.trim(),
-      },
+      {'messageRecordId': messageRecordId.trim()},
       timeout: const Duration(seconds: 20),
     );
   }
@@ -200,21 +198,24 @@ class InboxService {
           'Dạ hiện bên em đang có ưu đãi cho Mày sợi Hairstroke và Môi Collagen. Chị muốn đặt lịch khung giờ nào hôm nay để em giữ chỗ chuyên viên trưởng cho mình ạ?';
     }
 
-    final shortPsid =
-        psid.length > 6 ? '...${psid.substring(psid.length - 6)}' : psid;
+    final customerName = (row['customer_name'] ?? '').toString().trim();
+    final channelLabel =
+        channel == 'ZALO' ? 'Khách Zalo' : 'Khách Messenger';
 
     return {
       'id': (row['id'] ?? row['message_id'] ?? psid).toString(),
       'psid': psid,
       'pageId': (row['page_id'] ?? '').toString().trim(),
-      'name': 'Khách $channel ($shortPsid)',
+      'name': customerName.isNotEmpty ? customerName : channelLabel,
       'tag': isFromCustomer ? tag : 'ĐÃ PHẢN HỒI',
       'tagType': isFromCustomer ? tagType : 'replied',
       'summary': text.isNotEmpty
           ? text
           : (imageUrl.isNotEmpty ? '[Khách gửi hình ảnh]' : '[Tin nhắn mới]'),
       'imageUrl': imageUrl,
-      'aiSuggestion': aiSuggestion,
+      'aiSuggestion': (row['draft_reply'] ?? '').toString().trim().isNotEmpty
+          ? (row['draft_reply'] ?? '').toString().trim()
+          : aiSuggestion,
       'createdAt': (row['created_at'] ?? '').toString(),
     };
   }
