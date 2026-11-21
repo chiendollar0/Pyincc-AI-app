@@ -4,11 +4,13 @@ import 'package:flutter/services.dart';
 
 import 'core/errors/user_message.dart';
 import 'core/theme/app_theme.dart';
+import 'screens/catalog/catalog_management_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/staff/staff_management_screen.dart';
 import 'screens/tryon/tryon_studio_screen.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
+import 'services/catalog_service.dart';
 import 'services/facebook_connect_service.dart';
 import 'services/handoff_service.dart';
 import 'services/inbox_service.dart';
@@ -177,7 +179,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       const SizedBox(height: 6),
                       const Text(
-                        'Đăng nhập bằng tài khoản Chủ tiệm hoặc Nhân viên đã được cấp quyền.',
+                        'Đăng nhập bằng tài khoản Chủ tiệm đã được cấp quyền.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 13,
@@ -319,7 +321,16 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
     _inboxService.apiClient,
   );
 
+  late final CatalogService _catalogService = CatalogService(
+    _inboxService.apiClient,
+  );
+
+  int _catalogVersion = 0;
   String? _activeTryOnCustomerName;
+
+  void _onCatalogChanged() {
+    setState(() => _catalogVersion += 1);
+  }
 
   void _openTryOnTab({String? customerName}) {
     setState(() {
@@ -341,11 +352,14 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
           ),
           TryOnStudioScreen(
             handoffService: _handoffService,
+            catalogService: _catalogService,
+            catalogVersion: _catalogVersion,
             customerName: _activeTryOnCustomerName,
             onSignOut: widget.onSignOut,
           ),
           SalonOperationsHubScreen(
             inboxService: _inboxService,
+            onCatalogChanged: _onCatalogChanged,
             onSignOut: widget.onSignOut,
           ),
         ],
@@ -378,11 +392,13 @@ class _MainDashboardScreenState extends State<MainDashboardScreen> {
 
 class SalonOperationsHubScreen extends StatefulWidget {
   final InboxService inboxService;
+  final VoidCallback? onCatalogChanged;
   final VoidCallback? onSignOut;
 
   const SalonOperationsHubScreen({
     super.key,
     required this.inboxService,
+    this.onCatalogChanged,
     this.onSignOut,
   });
 
@@ -400,6 +416,8 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
   bool _isConnectingFacebook = false;
   List<Map<String, dynamic>> _connectedPages = const [];
   List<Map<String, String>> _bookings = const [];
+  List<Map<String, dynamic>> _dueFollowups = const [];
+  final Set<String> _busyFollowupIds = {};
   final TextEditingController _scriptController = TextEditingController();
 
   @override
@@ -424,11 +442,15 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
         widget.inboxService.fetchSettings(),
         widget.inboxService.fetchBookings(),
         widget.inboxService.fetchConnectedPages(),
+        widget.inboxService
+            .fetchDueFollowups()
+            .catchError((_) => const <Map<String, dynamic>>[]),
       ]);
       if (!mounted) return;
       final settings = results[0] as Map<String, dynamic>;
       final bookings = results[1] as List<Map<String, String>>;
       final pages = results[2] as List<Map<String, dynamic>>;
+      final dueFollowups = results[3] as List<Map<String, dynamic>>;
 
       setState(() {
         if (settings['onDuty'] is bool) {
@@ -440,6 +462,7 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
         }
         _bookings = bookings;
         _connectedPages = pages;
+        _dueFollowups = dueFollowups;
       });
     } catch (error) {
       if (!mounted) return;
@@ -448,6 +471,78 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
       });
     } finally {
       if (mounted) setState(() => _isLoadingOps = false);
+    }
+  }
+
+  Future<void> _markFollowupDone(String bookingId) async {
+    if (_busyFollowupIds.contains(bookingId)) return;
+    setState(() => _busyFollowupIds.add(bookingId));
+    try {
+      await widget.inboxService.markBookingFollowupDone(bookingId);
+      if (!mounted) return;
+      setState(() {
+        _dueFollowups = _dueFollowups
+            .where((item) => (item['id'] ?? '').toString() != bookingId)
+            .toList();
+      });
+      showAppMessage(context, 'Đã đánh dấu hoàn tất kiểm tra sau 7 ngày.');
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(context, userMessage(error), isError: true);
+    } finally {
+      if (mounted) setState(() => _busyFollowupIds.remove(bookingId));
+    }
+  }
+
+  Future<void> _showOnboardingClaimDialog() async {
+    final codeCtrl = TextEditingController();
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Nhập mã thiết lập tiệm'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Nhập mã thiết lập 1 lần để tạo tiệm và kích hoạt quyền Chủ tiệm cho tài khoản này.',
+              style: TextStyle(fontSize: 13, color: AppColors.textMuted),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: codeCtrl,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(
+                labelText: 'Mã thiết lập tiệm',
+                prefixIcon: Icon(Icons.key_outlined),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Kích hoạt'),
+          ),
+        ],
+      ),
+    );
+    final code = codeCtrl.text.trim();
+    codeCtrl.dispose();
+    if (submitted != true || code.isEmpty) return;
+
+    try {
+      final orgName = await widget.inboxService.claimOnboardingCode(code);
+      if (!mounted) return;
+      showAppMessage(context, 'Đã kích hoạt tiệm "$orgName" với quyền Chủ tiệm.');
+      await _loadAllData();
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(context, userMessage(error), isError: true);
     }
   }
 
@@ -716,6 +811,54 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
                   ),
                 ),
               ),
+          if (_dueFollowups.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              'Nhắc kiểm tra sau 7 ngày (${_dueFollowups.length})',
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 15,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Nhắc nội bộ để chủ tiệm chủ động hỏi thăm khách (ứng dụng không tự nhắn khách).',
+              style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+            ),
+            const SizedBox(height: 6),
+            for (final f in _dueFollowups)
+              Card(
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Colors.orange.withValues(alpha: 0.14),
+                    child: Icon(
+                      Icons.notifications_active_outlined,
+                      color: Colors.orange.shade800,
+                    ),
+                  ),
+                  title: Text(
+                    (f['customer_name'] ?? 'Khách hàng').toString(),
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(
+                    [
+                      if ((f['service_name'] ?? '').toString().isNotEmpty)
+                        f['service_name'].toString(),
+                      if ((f['service_date'] ?? '').toString().isNotEmpty)
+                        'Ngày làm: ${f['service_date']}',
+                    ].join(' • '),
+                  ),
+                  trailing: OutlinedButton(
+                    onPressed: _busyFollowupIds
+                            .contains((f['id'] ?? '').toString())
+                        ? null
+                        : () => _markFollowupDone((f['id'] ?? '').toString()),
+                    child: const Text('Đã kiểm tra'),
+                  ),
+                ),
+              ),
+          ],
         ],
       ),
     );
@@ -866,16 +1009,53 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
               leading: CircleAvatar(
                 backgroundColor: AppColors.primary.withValues(alpha: 0.12),
                 child: const Icon(
-                  Icons.manage_accounts_outlined,
+                  Icons.style_outlined,
                   color: AppColors.primary,
                 ),
               ),
               title: const Text(
-                'Quản lý Nhân viên & Nhật ký',
+                'Quản lý Danh mục dịch vụ',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
               ),
               subtitle: const Text(
-                'Mời nhân viên, đổi quyền Chủ tiệm/Nhân viên, thu hồi quyền và xem nhật ký hoạt động.',
+                'Thêm, sửa, xóa mẫu dịch vụ nội bộ theo từng tiệm (không lưu giá trong app).',
+                style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => CatalogManagementScreen(
+                      catalogService: CatalogService(
+                        widget.inboxService.apiClient,
+                      ),
+                      onChanged: widget.onCatalogChanged,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 8,
+              ),
+              leading: CircleAvatar(
+                backgroundColor: AppColors.primary.withValues(alpha: 0.12),
+                child: const Icon(
+                  Icons.history,
+                  color: AppColors.primary,
+                ),
+              ),
+              title: const Text(
+                'Nhật ký hoạt động & Tài khoản',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+              subtitle: const Text(
+                'Xem nhật ký thao tác của Chủ tiệm và kiểm soát tài khoản của tiệm.',
                 style: TextStyle(fontSize: 12, color: AppColors.textMuted),
               ),
               trailing: const Icon(Icons.chevron_right),
@@ -888,6 +1068,32 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
                   ),
                 );
               },
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 8,
+              ),
+              leading: CircleAvatar(
+                backgroundColor: AppColors.primary.withValues(alpha: 0.12),
+                child: const Icon(
+                  Icons.key_outlined,
+                  color: AppColors.primary,
+                ),
+              ),
+              title: const Text(
+                'Nhập mã thiết lập tiệm',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+              subtitle: const Text(
+                'Kích hoạt quyền Chủ tiệm cho tài khoản mới bằng mã thiết lập 1 lần.',
+                style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _showOnboardingClaimDialog,
             ),
           ),
           const SizedBox(height: 12),

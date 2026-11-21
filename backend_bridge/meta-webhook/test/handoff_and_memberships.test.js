@@ -114,6 +114,18 @@ function createMockEnv() {
         return { data: updated, error: null };
       }
 
+      if (action === 'delete') {
+        const matched = matchRows();
+        const matchedSet = new Set(matched);
+        state.tables[tableName] = (state.tables[tableName] || []).filter((r) => !matchedSet.has(r));
+        const deleted = matched.map((r) => ({ ...r }));
+        if (singleMode === 'maybeSingle') return { data: deleted[0] || null, error: null };
+        if (singleMode === 'single') {
+          return deleted[0] ? { data: deleted[0], error: null } : { data: null, error: { message: 'not found' } };
+        }
+        return { data: deleted, error: null };
+      }
+
       return { data: null, error: null };
     };
 
@@ -132,12 +144,20 @@ function createMockEnv() {
         payload = data;
         return q;
       },
+      delete() {
+        action = 'delete';
+        return q;
+      },
       eq(col, val) {
         filters.push((r) => String(r[col] ?? '') === String(val ?? ''));
         return q;
       },
       neq(col, val) {
         filters.push((r) => String(r[col] ?? '') !== String(val ?? ''));
+        return q;
+      },
+      is(col, val) {
+        filters.push((r) => (val === null ? (r[col] === null || r[col] === undefined) : r[col] === val));
         return q;
       },
       gte(col, val) {
@@ -262,6 +282,7 @@ function createMockEnv() {
 
   const indexPath = require.resolve('../index.js');
   delete require.cache[indexPath];
+  process.removeAllListeners('unhandledRejection');
   const mod = require('../index.js');
   Module._load = origLoad;
 
@@ -443,15 +464,22 @@ test('Luồng B1-B3: capture -> pending_review (no send) -> send before approve 
   assert.equal(earlySend.body.error, 'NOT_APPROVED');
   assert.equal(state.axiosCalls.filter((c) => c.url.includes('graph.facebook.com')).length, 0);
 
-  // 3. Approve -> marks approved + approved_by + audit_log, still does NOT send
-  const approveRes = await invoke('POST', `/handoff-cases/${caseId}/approve`, {
+  // 3. Approve by owner -> marks approved + approved_by + audit_log, still does NOT send
+  const staffApprove = await invoke('POST', `/handoff-cases/${caseId}/approve`, {
     token: tokens.staffToken,
+    body: { draft_reply: 'Staff cannot approve in single-owner v1' },
+  });
+  assert.equal(staffApprove.statusCode, 403);
+  assert.equal(staffApprove.body.error, 'FORBIDDEN_ROLE');
+
+  const approveRes = await invoke('POST', `/handoff-cases/${caseId}/approve`, {
+    token: tokens.ownerToken,
     body: { draft_reply: 'Chào chị, bên em tư vấn mẫu Hairstroke tự nhiên ạ.' },
   });
   assert.equal(approveRes.statusCode, 200);
   assert.equal(approveRes.body.status, 'approved');
   const approvedRow = state.tables.handoff_cases.find((r) => r.id === caseId);
-  assert.equal(approvedRow.approved_by, 'user-staff');
+  assert.equal(approvedRow.approved_by, 'user-owner');
   assert.ok(approvedRow.approved_at);
   assert.equal(state.axiosCalls.filter((c) => c.url.includes('graph.facebook.com')).length, 0);
   assert.ok(state.tables.audit_logs.some((l) => l.action === 'handoff_case.approve' && l.target_id === caseId));
@@ -536,7 +564,7 @@ test('Luồng B1: 50/day Gemini cap allows exact 50th case and blocks 51st with 
   assert.equal(state.axiosCalls.filter((c) => c.url.includes('generativelanguage')).length, geminiCallsBefore);
 });
 
-test('Luồng B4 & revoked staff guard: /api/tryon/generate returns 501; revoked staff is blocked with 403', async () => {
+test('Luồng B4 & revoked/non-owner guard: /api/tryon/generate returns 501; revoked & staff accounts are blocked with 403', async () => {
   const { invoke, tokens } = createMockEnv();
 
   const tryonRes = await invoke('POST', '/api/tryon/generate', {
@@ -551,114 +579,75 @@ test('Luồng B4 & revoked staff guard: /api/tryon/generate returns 501; revoked
     ['POST', '/handoff-cases/any-id/approve', { draft_reply: 'test' }],
     ['POST', '/handoff-cases/any-id/send', {}],
   ]) {
-    const res = await invoke(method, path, { token: tokens.revokedToken, body });
-    assert.equal(res.statusCode, 403);
-    assert.equal(res.body.error, 'NO_MEMBERSHIP');
+    const revokedRes = await invoke(method, path, { token: tokens.revokedToken, body });
+    assert.equal(revokedRes.statusCode, 403);
+    assert.equal(revokedRes.body.error, 'NO_MEMBERSHIP');
+
+    const staffRes = await invoke(method, path, { token: tokens.staffToken, body });
+    assert.equal(staffRes.statusCode, 403);
+    assert.equal(staffRes.body.error, 'FORBIDDEN_ROLE');
   }
 });
 
-test('Giai đoạn 3 - C1: owner manages staff roles, revocation, self/last-owner protection, and audit_logs; staff gets 403', async () => {
+test('Single-owner v1 enforcement: invite/promote/reactivate blocked with 403 SINGLE_OWNER_ONLY; legacy staff revocable; audit_logs owner-only', async () => {
   const { state, invoke, tokens } = createMockEnv();
 
-  // /me returns role
+  // /me returns owner role; non-owner blocked
   const meOwner = await invoke('GET', '/me', { token: tokens.ownerToken });
   assert.equal(meOwner.statusCode, 200);
   assert.equal(meOwner.body.role, 'owner');
+  const meStaff = await invoke('GET', '/me', { token: tokens.staffToken });
+  assert.equal(meStaff.statusCode, 403);
+  assert.equal(meStaff.body.error, 'FORBIDDEN_ROLE');
 
   // Staff cannot access /memberships or /audit-logs
-  const staffList = await invoke('GET', '/memberships', { token: tokens.staffToken });
-  assert.equal(staffList.statusCode, 403);
-  assert.equal(staffList.body.error, 'FORBIDDEN_ROLE');
-  const staffAudit = await invoke('GET', '/audit-logs', { token: tokens.staffToken });
-  assert.equal(staffAudit.statusCode, 403);
+  assert.equal((await invoke('GET', '/memberships', { token: tokens.staffToken })).statusCode, 403);
+  assert.equal((await invoke('GET', '/audit-logs', { token: tokens.staffToken })).statusCode, 403);
 
-  // Owner invites new staff + duplicate returns 409
-  const invite1 = await invoke('POST', '/memberships/invite', {
+  // Inviting additional accounts is locked in single-owner v1
+  const inviteRes = await invoke('POST', '/memberships/invite', {
     token: tokens.ownerToken,
     body: { email: 'newstaff@salon.vn' },
   });
-  assert.equal(invite1.statusCode, 200);
-  const inviteDup = await invoke('POST', '/memberships/invite', {
-    token: tokens.ownerToken,
-    body: { email: 'newstaff@salon.vn' },
-  });
-  assert.equal(inviteDup.statusCode, 409);
-  assert.equal(inviteDup.body.error, 'INVITATION_ALREADY_EXISTS');
+  assert.equal(inviteRes.statusCode, 403);
+  assert.equal(inviteRes.body.error, 'SINGLE_OWNER_ONLY');
 
-  // Owner cannot activate a pending invite without user_id
-  const badActivate = await invoke('PATCH', `/memberships/${invite1.body.invitation.id}`, {
-    token: tokens.ownerToken,
-    body: { status: 'active' },
-  });
-  assert.equal(badActivate.statusCode, 400);
-  assert.equal(badActivate.body.error, 'INVITATION_NOT_ACCEPTED');
-
-  // Owner cannot modify self
-  const selfEdit = await invoke('PATCH', '/memberships/mem-owner', {
-    token: tokens.ownerToken,
-    body: { role: 'staff' },
-  });
-  assert.equal(selfEdit.statusCode, 400);
-  assert.equal(selfEdit.body.error, 'CANNOT_MODIFY_SELF');
-
-  // Owner promotes staff -> owner, then demotes back -> staff, then revokes staff
+  // Promoting or reactivating via PATCH is locked in single-owner v1
   const promote = await invoke('PATCH', '/memberships/mem-staff', {
     token: tokens.ownerToken,
     body: { role: 'owner' },
   });
-  assert.equal(promote.statusCode, 200);
-  assert.equal(promote.body.membership.role, 'owner');
+  assert.equal(promote.statusCode, 403);
+  assert.equal(promote.body.error, 'SINGLE_OWNER_ONLY');
 
-  const demote = await invoke('PATCH', '/memberships/mem-staff', {
+  const reactivate = await invoke('PATCH', '/memberships/mem-revoked', {
     token: tokens.ownerToken,
-    body: { role: 'staff' },
+    body: { status: 'active' },
   });
-  assert.equal(demote.statusCode, 200);
-  assert.equal(demote.body.membership.role, 'staff');
+  assert.equal(reactivate.statusCode, 403);
+  assert.equal(reactivate.body.error, 'SINGLE_OWNER_ONLY');
 
+  // Owner cannot revoke self
+  const selfRevoke = await invoke('POST', '/memberships/mem-owner/revoke', {
+    token: tokens.ownerToken,
+  });
+  assert.equal(selfRevoke.statusCode, 400);
+  assert.equal(selfRevoke.body.error, 'CANNOT_MODIFY_SELF');
+
+  // Owner CAN revoke a legacy non-owner membership and it is logged
   const revoke = await invoke('POST', '/memberships/mem-staff/revoke', {
     token: tokens.ownerToken,
   });
   assert.equal(revoke.statusCode, 200);
   assert.equal(revoke.body.membership.status, 'revoked');
 
-  // Revoked staff is immediately blocked on subsequent API calls
-  const blocked = await invoke('GET', '/handoff-cases', { token: tokens.staffToken });
-  assert.equal(blocked.statusCode, 403);
-  assert.equal(blocked.body.error, 'NO_MEMBERSHIP');
-
-  // Audit logs capture invite, role changes, and revoke
   const auditRes = await invoke('GET', '/audit-logs', { token: tokens.ownerToken });
   assert.equal(auditRes.statusCode, 200);
-  const actions = auditRes.body.logs.map((l) => l.action);
-  assert.ok(actions.includes('membership.invite'));
-  assert.ok(actions.includes('membership.role_changed'));
-  assert.ok(actions.includes('membership.revoked'));
-
-  // Last active owner protection (if another owner record is the sole active owner)
-  state.tables.memberships.push({
-    id: 'mem-sole-other',
-    org_id: 'org-1',
-    user_id: 'user-other-owner',
-    invited_email: 'other@salon.vn',
-    role: 'owner',
-    status: 'active',
-  });
-  // Make mem-owner inactive temporarily in DB? No: countActiveOwners counts active owners.
-  // Test with only 1 active owner by revoking mem-owner directly in state for this check:
-  state.tables.memberships.find((m) => m.id === 'mem-owner').role = 'staff';
-  // Give caller owner role via separate token? Simpler: check when activeOwners === 1:
-  const soleCheck = state.tables.memberships.find((m) => m.id === 'mem-owner');
-  soleCheck.role = 'owner';
-  soleCheck.status = 'active';
-  // Remove mem-sole-other -> only mem-owner is active; verify self-protection already blocks it.
-  // Also test non-self sole owner by setting mem-sole-other active and mem-owner non-owner?
-  // Already verified countActiveOwners logic directly:
-  state.tables.memberships = state.tables.memberships.filter((m) => m.id !== 'mem-sole-other');
+  assert.ok(auditRes.body.logs.some((l) => l.action === 'membership.revoked'));
   assert.equal(state.tables.memberships.filter((m) => m.role === 'owner' && m.status === 'active').length, 1);
 });
 
-test('Giai đoạn 3 - C4: /privacy and /terms disclose Supabase, Gemini, Meta, retention, and deletion instructions', async () => {
+test('Giai đoạn 3 - C4: /privacy, /terms, and /data-deletion clarify single-owner model & Facebook removal vs Supabase deletion', async () => {
   const { invoke } = createMockEnv();
 
   const privacy = await invoke('GET', '/privacy');
@@ -667,11 +656,205 @@ test('Giai đoạn 3 - C4: /privacy and /terms disclose Supabase, Gemini, Meta, 
   assert.match(privacy.body, /Google Gemini API/);
   assert.match(privacy.body, /Meta Platforms/);
   assert.match(privacy.body, /\/data-deletion/);
+  assert.match(privacy.body, /không tự xóa dữ liệu hội thoại/);
   assert.match(privacy.body, /48 giờ/);
+
+  const deletion = await invoke('GET', '/data-deletion');
+  assert.equal(deletion.statusCode, 200);
+  assert.match(deletion.body, /không tự xóa dữ liệu hội thoại/);
+  assert.match(deletion.body, /phanhungkg03@gmail\.com/);
 
   const terms = await invoke('GET', '/terms');
   assert.equal(terms.statusCode, 200);
-  assert.match(terms.body, /Kiểm duyệt bắt buộc/);
+  assert.match(terms.body, /Chủ tiệm duy nhất duyệt/);
   assert.match(terms.body, /Sự đồng ý của khách hàng/);
   assert.match(terms.body, /Google Gemini/);
 });
+
+test('Codex fix: concurrent /handoff-cases/:id/analyze atomically claims case so Gemini is called once and 2nd gets 409', async () => {
+  const { state, invoke, tokens } = createMockEnv();
+  const nowIso = new Date().toISOString();
+  for (let i = 0; i < 49; i += 1) {
+    state.tables.handoff_cases.push({
+      id: `counted-${i}`,
+      org_id: 'org-1',
+      source: 'owner_capture',
+      status: 'pending_review',
+      created_at: nowIso,
+    });
+  }
+  state.tables.handoff_cases.push({
+    id: 'case-reanalyze',
+    org_id: 'org-1',
+    source: 'owner_capture',
+    customer_text: 'Khách hỏi dáng mày',
+    status: 'new',
+    created_at: nowIso,
+  });
+
+  const [r1, r2] = await Promise.all([
+    invoke('POST', '/handoff-cases/case-reanalyze/analyze', { token: tokens.ownerToken }),
+    invoke('POST', '/handoff-cases/case-reanalyze/analyze', { token: tokens.ownerToken }),
+  ]);
+  const statuses = [r1.statusCode, r2.statusCode].sort();
+  assert.deepEqual(statuses, [200, 409]);
+  assert.equal(state.axiosCalls.filter((c) => c.url.includes('generativelanguage')).length, 1);
+});
+
+test('Onboarding claim: confirmed email claims one-time code, creates org + owner + audit_log, blocks reuse & unconfirmed email', async () => {
+  const { state, invoke } = createMockEnv();
+  const freshToken = makeFakeJwt('user-new-owner');
+  const unconfirmedToken = makeFakeJwt('user-unconfirmed');
+  state.usersByToken[freshToken] = {
+    id: 'user-new-owner',
+    email: 'newowner@salon.vn',
+    email_confirmed_at: '2026-11-20T00:00:00Z',
+  };
+  state.usersByToken[unconfirmedToken] = {
+    id: 'user-unconfirmed',
+    email: 'unconfirmed@salon.vn',
+    email_confirmed_at: null,
+  };
+  state.tables.onboarding_codes = [{
+    code: 'SALON2026',
+    org_name: 'Linh Beauty Studio',
+    org_id: null,
+    claimed_by: null,
+  }];
+
+  const unconf = await invoke('POST', '/onboarding/claim', {
+    token: unconfirmedToken,
+    body: { code: 'SALON2026' },
+  });
+  assert.equal(unconf.statusCode, 403);
+  assert.equal(unconf.body.error, 'EMAIL_NOT_CONFIRMED');
+
+  const ok = await invoke('POST', '/onboarding/claim', {
+    token: freshToken,
+    body: { code: 'salon2026' },
+  });
+  assert.equal(ok.statusCode, 200);
+  assert.equal(ok.body.role, 'owner');
+  assert.equal(ok.body.org_name, 'Linh Beauty Studio');
+  assert.ok(state.tables.audit_logs.some((l) => l.action === 'onboarding.claim'));
+
+  const secondToken = makeFakeJwt('user-second');
+  state.usersByToken[secondToken] = {
+    id: 'user-second',
+    email: 'second@salon.vn',
+    email_confirmed_at: '2026-11-20T00:00:00Z',
+  };
+  const reused = await invoke('POST', '/onboarding/claim', {
+    token: secondToken,
+    body: { code: 'SALON2026' },
+  });
+  assert.equal(reused.statusCode, 409);
+  assert.equal(reused.body.error, 'ONBOARDING_CODE_ALREADY_USED');
+});
+
+test('Price-free /catalog CRUD: owner manages items with audit_logs; non-owner blocked with 403 on read & write', async () => {
+  const { state, invoke, tokens } = createMockEnv();
+
+  const staffRead = await invoke('GET', '/catalog', { token: tokens.staffToken });
+  assert.equal(staffRead.statusCode, 403);
+  const staffWrite = await invoke('POST', '/catalog', {
+    token: tokens.staffToken,
+    body: { name: 'Môi Collagen', category: 'lip' },
+  });
+  assert.equal(staffWrite.statusCode, 403);
+
+  const ownerRead = await invoke('GET', '/catalog', { token: tokens.ownerToken });
+  assert.equal(ownerRead.statusCode, 200);
+  assert.equal(ownerRead.body.items.length, 1);
+
+  const created = await invoke('POST', '/catalog', {
+    token: tokens.ownerToken,
+    body: { name: 'Môi Collagen Cam Đào', category: 'lip', description: 'Tự nhiên, ít sưng' },
+  });
+  assert.equal(created.statusCode, 201);
+  const itemId = created.body.item.id;
+  assert.equal(created.body.item.category, 'lip');
+
+  const updated = await invoke('PUT', `/catalog/${itemId}`, {
+    token: tokens.ownerToken,
+    body: { name: 'Môi Collagen Hồng Baby', category: 'lip', description: 'Màu trong nhẹ' },
+  });
+  assert.equal(updated.statusCode, 200);
+  assert.equal(updated.body.item.name, 'Môi Collagen Hồng Baby');
+
+  const deleted = await invoke('DELETE', `/catalog/${itemId}`, { token: tokens.ownerToken });
+  assert.equal(deleted.statusCode, 200);
+
+  const actions = state.tables.audit_logs.map((l) => l.action);
+  assert.ok(actions.includes('catalog.create'));
+  assert.ok(actions.includes('catalog.update'));
+  assert.ok(actions.includes('catalog.delete'));
+});
+
+test('7-day booking reminders & case release: returns due follow-ups, marks done, and releases thread control', async () => {
+  const { state, invoke, tokens } = createMockEnv();
+  const vnToday = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+  const tenDaysAgo = new Date(Date.now() + 7 * 3600 * 1000 - 10 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+  state.tables.bookings = [
+    {
+      id: 'bk-today',
+      org_id: 'org-1',
+      customer_name: 'Chị Lan',
+      service_name: 'Hairstroke',
+      scheduled_at: new Date().toISOString(),
+      service_date: vnToday,
+      followup_done: false,
+      status: 'confirmed',
+    },
+    {
+      id: 'bk-due',
+      org_id: 'org-1',
+      customer_name: 'Chị Hoa',
+      service_name: 'Môi Collagen',
+      scheduled_at: new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString(),
+      service_date: tenDaysAgo,
+      followup_done: false,
+      status: 'done',
+    },
+  ];
+
+  const rem1 = await invoke('GET', '/bookings/reminders', { token: tokens.ownerToken });
+  assert.equal(rem1.statusCode, 200);
+  assert.equal(rem1.body.today.length, 1);
+  assert.equal(rem1.body.dueFollowups.length, 1);
+  assert.equal(rem1.body.dueFollowups[0].id, 'bk-due');
+
+  const mark = await invoke('PATCH', '/bookings/bk-due/followup', {
+    token: tokens.ownerToken,
+    body: { done: true },
+  });
+  assert.equal(mark.statusCode, 200);
+  assert.equal(mark.body.booking.followup_done, true);
+
+  const rem2 = await invoke('GET', '/bookings/reminders', { token: tokens.ownerToken });
+  assert.equal(rem2.body.dueFollowups.length, 0);
+
+  // Release thread control
+  state.tables.handoff_cases.push({
+    id: 'case-rel-1',
+    org_id: 'org-1',
+    source: 'business_ai_handover',
+    page_id: 'page-test-1',
+    psid: 'psid-rel-1',
+    status: 'sent',
+  });
+  state.tables.handover_threads = [{
+    org_id: 'org-1',
+    page_id: 'page-test-1',
+    psid: 'psid-rel-1',
+    active: true,
+  }];
+  const rel = await invoke('POST', '/handoff-cases/case-rel-1/release', { token: tokens.ownerToken });
+  assert.equal(rel.statusCode, 200);
+  assert.equal(rel.body.released, true);
+  assert.equal(state.tables.handover_threads[0].active, false);
+  assert.ok(state.axiosCalls.some((c) => c.url.includes('/release_thread_control')));
+  assert.ok(state.tables.audit_logs.some((l) => l.action === 'handoff_case.release'));
+});
+

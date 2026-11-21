@@ -56,7 +56,7 @@ class _InboxScreenState extends State<InboxScreen> {
     }
     try {
       final items = await widget.handoffService.fetchCases(
-        status: 'pending_review,approved',
+        status: 'new,failed,pending_review,approved',
       );
       if (!mounted) return;
       setState(() {
@@ -78,13 +78,45 @@ class _InboxScreenState extends State<InboxScreen> {
     if (_filter == 'high') {
       return _cases.where((c) => c.risk == 'high').toList();
     }
+    if (_filter == 'pending_review') {
+      return _cases
+          .where((c) =>
+              c.status == 'pending_review' ||
+              c.status == 'new' ||
+              c.status == 'failed')
+          .toList();
+    }
     return _cases.where((c) => c.status == _filter).toList();
   }
 
   int _countOf(String key) {
     if (key == 'all') return _cases.length;
     if (key == 'high') return _cases.where((c) => c.risk == 'high').length;
+    if (key == 'pending_review') {
+      return _cases
+          .where((c) =>
+              c.status == 'pending_review' ||
+              c.status == 'new' ||
+              c.status == 'failed')
+          .length;
+    }
     return _cases.where((c) => c.status == key).length;
+  }
+
+  Future<void> _analyze(HandoffCase item) async {
+    if (_busyIds.contains(item.id)) return;
+    setState(() => _busyIds.add(item.id));
+    try {
+      await widget.handoffService.analyzeCase(item.id);
+      if (!mounted) return;
+      showAppMessage(context, 'Đã phân tích ca tư vấn (chưa gửi đi).');
+      await _load(silent: true);
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(context, userMessage(error), isError: true);
+    } finally {
+      if (mounted) setState(() => _busyIds.remove(item.id));
+    }
   }
 
   Future<void> _approve(HandoffCase item) async {
@@ -132,6 +164,43 @@ class _InboxScreenState extends State<InboxScreen> {
       await widget.handoffService.sendCase(item.id);
       if (!mounted) return;
       showAppMessage(context, 'Đã gửi tin qua Messenger cho khách.');
+      await _load(silent: true);
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(context, userMessage(error), isError: true);
+    } finally {
+      if (mounted) setState(() => _busyIds.remove(item.id));
+    }
+  }
+
+  Future<void> _release(HandoffCase item) async {
+    if (_busyIds.contains(item.id)) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Trả hội thoại về Business AI'),
+        content: const Text(
+          'Xác nhận trả quyền kiểm soát hội thoại này về trạng thái rảnh (Business AI tiếp nhận lại)?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Trả quyền'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _busyIds.add(item.id));
+    try {
+      await widget.handoffService.releaseCase(item.id);
+      if (!mounted) return;
+      showAppMessage(context, 'Đã trả hội thoại về Business AI.');
       await _load(silent: true);
     } catch (error) {
       if (!mounted) return;
@@ -257,9 +326,11 @@ class _InboxScreenState extends State<InboxScreen> {
           return _CaseCard(
             item: item,
             busy: _busyIds.contains(item.id),
+            onAnalyze: () => _analyze(item),
             onApprove: () => _approve(item),
             onReject: () => _reject(item),
             onSend: () => _send(item),
+            onRelease: () => _release(item),
             onStudio: () => widget.onOpenTryOn(
               customerName: item.source == 'business_ai_handover'
                   ? 'Khách Messenger'
@@ -470,17 +541,21 @@ class _CaseCard extends StatelessWidget {
   const _CaseCard({
     required this.item,
     required this.busy,
+    required this.onAnalyze,
     required this.onApprove,
     required this.onReject,
     required this.onSend,
+    required this.onRelease,
     required this.onStudio,
   });
 
   final HandoffCase item;
   final bool busy;
+  final VoidCallback onAnalyze;
   final VoidCallback onApprove;
   final VoidCallback onReject;
   final VoidCallback onSend;
+  final VoidCallback onRelease;
   final VoidCallback onStudio;
 
   Color get _riskColor {
@@ -510,6 +585,10 @@ class _CaseCard extends StatelessWidget {
     final sourceLabel = item.source == 'business_ai_handover'
         ? 'Business AI chuyển ca'
         : 'Chủ tiệm chụp tại tiệm';
+    final displayText = item.summary.isNotEmpty
+        ? item.summary
+        : item.customerText;
+    final needsAnalysis = item.status == 'new' || item.status == 'failed';
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -541,20 +620,20 @@ class _CaseCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  _riskLabel,
+                  needsAnalysis ? 'Chưa phân tích' : _riskLabel,
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
-                    color: _riskColor,
+                    color: needsAnalysis ? AppColors.primary : _riskColor,
                   ),
                 ),
               ),
             ],
           ),
-          if (item.summary.isNotEmpty) ...[
+          if (displayText.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(
-              item.summary,
+              displayText,
               style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
             ),
           ],
@@ -623,6 +702,16 @@ class _CaseCard extends StatelessWidget {
                 onPressed: busy ? null : onReject,
                 child: const Text('Từ chối'),
               ),
+              if (item.canRelease)
+                TextButton(
+                  onPressed: busy ? null : onRelease,
+                  child: const Text('Trả Business AI'),
+                ),
+              if (needsAnalysis)
+                OutlinedButton(
+                  onPressed: busy ? null : onAnalyze,
+                  child: const Text('Phân tích AI'),
+                ),
               if (item.status == 'pending_review')
                 OutlinedButton(
                   onPressed: busy ? null : onApprove,

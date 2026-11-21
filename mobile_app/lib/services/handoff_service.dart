@@ -38,6 +38,9 @@ class HandoffCase {
   bool get canSend =>
       status == 'approved' && psid.isNotEmpty && pageId.isNotEmpty;
 
+  bool get canRelease =>
+      source == 'business_ai_handover' && psid.isNotEmpty && pageId.isNotEmpty;
+
   factory HandoffCase.fromJson(Map<String, dynamic> j) {
     final analysis = j['analysis'] is Map
         ? Map<String, dynamic>.from(j['analysis'] as Map)
@@ -137,6 +140,24 @@ class HandoffService {
       '/handoff-cases/$cleanId/send',
       const {},
       timeout: const Duration(seconds: 20),
+    );
+  }
+
+  Future<void> releaseCase(String id) async {
+    final cleanId = Uri.encodeComponent(id.trim());
+    await api.post(
+      '/handoff-cases/$cleanId/release',
+      const {},
+      timeout: const Duration(seconds: 15),
+    );
+  }
+
+  Future<void> analyzeCase(String id) async {
+    final cleanId = Uri.encodeComponent(id.trim());
+    await api.post(
+      '/handoff-cases/$cleanId/analyze',
+      const {},
+      timeout: const Duration(seconds: 40),
     );
   }
 }

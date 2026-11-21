@@ -159,6 +159,38 @@ class InboxService {
     };
   }
 
+  Future<List<Map<String, dynamic>>> fetchDueFollowups() async {
+    if (!hasWebhookConfig) return const [];
+    final decoded = await apiClient.get(
+      '/bookings/reminders',
+      timeout: const Duration(seconds: 12),
+    );
+    final raw = decoded['dueFollowups'];
+    if (raw is! List) return const [];
+    return raw.whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<void> markBookingFollowupDone(
+    String bookingId, {
+    bool done = true,
+  }) async {
+    final cleanId = Uri.encodeComponent(bookingId.trim());
+    await apiClient.patch(
+      '/bookings/$cleanId/followup',
+      {'done': done},
+      timeout: const Duration(seconds: 12),
+    );
+  }
+
+  Future<String> claimOnboardingCode(String code) async {
+    final decoded = await apiClient.post(
+      '/onboarding/claim',
+      {'code': code.trim()},
+      timeout: const Duration(seconds: 15),
+    );
+    return (decoded['org_name'] ?? 'PYINCC Salon').toString();
+  }
+
   Map<String, dynamic> _mapRowToTriageItem(Map<String, dynamic> row) {
     final psid = (row['customer_psid'] ?? 'unknown').toString();
     final channel = (row['channel'] ?? 'facebook').toString().toUpperCase();

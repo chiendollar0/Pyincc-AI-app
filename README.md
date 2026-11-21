@@ -1,60 +1,99 @@
 # PYINCC AI CRM
 
-Ứng dụng quản lý tiệm phun xăm, spa và thẩm mỹ viện. Chủ tiệm (admin Fanpage) quản lý toàn bộ, duyệt mọi nội dung trước khi gửi tới khách hàng.
+Ứng dụng quản lý tiệm phun xăm, spa và thẩm mỹ viện. Một tài khoản chủ tiệm, toàn quyền, là admin Fanpage. Business AI của Meta chăm sóc khách. Gemini chỉ phục vụ chủ tiệm trong app. Chủ tiệm là người duy nhất duyệt và gửi cho khách.
 
-> **Repo công khai:** Không bao giờ commit `.env`, khóa API, token, keystore, hoặc ảnh khuôn mặt khách hàng thật.
+> Nguồn chuẩn về phạm vi và quy tắc nghiệp vụ: [docs/SPEC.md](docs/SPEC.md). README chỉ tóm tắt; khi mâu thuẫn, SPEC thắng.
 
-## Mô hình hoạt động
+## Nguyên tắc vận hành
 
-- **Business AI của Meta** chăm sóc 100% khách trên Messenger (giá, giờ làm việc, địa chỉ, đặt lịch). Ứng dụng không trả lời khách thay AI khi chưa được chuyển.
-- **Ứng dụng** nhận ca khi Business AI chuyển hội thoại (Conversation Routing) hoặc khi chủ tiệm chụp ảnh khách trực tiếp tại tiệm (Luồng B).
-- **Gemini** chỉ làm việc trong ứng dụng, phục vụ chủ tiệm: phân tích ảnh khách, nhận xét tham khảo, nhắc lịch kiểm tra sau 7 ngày. Gemini không tự gửi tin cho Facebook.
-- **Chủ tiệm** duyệt và bấm gửi mọi nội dung tới khách hàng. Server bắt buộc kiểm tra trạng thái `approved` và `approved_by` trong database trước khi gọi Graph API.
+- **Business AI** trả lời khách 100% (giá, giờ, địa chỉ, đặt lịch, chuyển ca khi cần). App không trả lời khách thay AI.
+- **Ứng dụng** nhận ca khi Business AI chuyển hội thoại (Conversation Routing). Chưa được chuyển thì app không can thiệp.
+- **Gemini** chỉ làm việc trong app, phục vụ chủ tiệm: phân tích ảnh khách, tư vấn tham khảo, soạn nháp, tổng hợp lịch và nhắc việc. Gemini không đọc nội dung tin nhắn, không gọi Facebook, không gửi gì ra ngoài.
+- **Mọi tin gửi đi** phải có bản nháp đã duyệt trong database. Server kiểm tra trước khi gọi Graph API.
 
-## Trạng thái đã xác minh
+## Trạng thái
 
-| Hạng mục | Trạng thái | Ghi chú |
+Cập nhật lần cuối: 21/11/2026. Mỗi mục chỉ được đánh "Xong" khi có kết quả trong [docs/TEST-PLAN.md](docs/TEST-PLAN.md).
+
+| Phase | Nội dung | Trạng thái |
 |---|---|---|
-| Domain backend `https://pyincccrm.bothelper.vn` | ✅ Đã chạy | `/health` trả `200`, chạy qua Cloudflare + Render |
-| Supabase Postgres + 17 bảng bật RLS | ✅ Đã chạy | Đã chạy đủ migration bảo mật, `handoff_cases`, `audit_logs`, `onboarding_codes` |
-| Đăng nhập email + kích hoạt quyền `owner` | ✅ Đã chạy | Hỗ trợ `POST /onboarding/claim` bằng mã thiết lập tiệm |
-| Kết nối Fanpage Facebook (Android SDK) | ✅ Đã cấu hình | Đã thêm nền tảng Android (`vn.pyincc.aicrm`), xin đủ `pages_show_list`, `pages_messaging`, `pages_manage_metadata` |
-| Catalog theo tiệm (không giá, không mặc định) | ✅ Đã chạy | `GET/POST/PUT/DELETE /catalog` cách ly theo `org_id` |
-| Luồng B: Chụp ảnh tại tiệm + phân tích Gemini + duyệt/gửi | ✅ Đã chạy | Giới hạn 50 lượt/ngày/tiệm, kiểm thử tự động 6/6 kịch bản |
-| Lịch hẹn & nhắc kiểm tra sau 7 ngày | ✅ Đã chạy | `GET /bookings/reminders`, `PATCH /bookings/:id/followup` (chỉ nhắc chủ tiệm, không tự nhắn khách) |
-| Tạo ảnh demo ghép mày/môi | ⏳ Chờ model | `POST /api/tryon/generate` trả `501 NOT_IMPLEMENTED` |
-| Luồng A: Nhận ca từ Business AI (Conversation Routing) | ⏳ Chờ Giai đoạn 0 | Chờ kết quả test `thread_owner` / `take_thread_control` / `pass_thread_control` trên Page test |
-| Thông báo đẩy (FCM) | ⬜ Chưa làm | Giai đoạn 4 |
-| App Review & Business Verification | ⬜ Chưa nộp | Bắt buộc trước khi mở cho tiệm ngoài danh sách tester |
+| 0 | Nền tảng: CI, lockfile, quét bí mật, dọn mã chết | Đang làm |
+| 1 | Xác thực, mã thiết lập tiệm, RLS | Chưa bắt đầu |
+| 2 | Kết nối Facebook, lưu Page token mã hóa, gỡ liên kết | Chưa bắt đầu |
+| 3 | Catalog theo tiệm (không giá, không mặc định) | Chưa bắt đầu |
+| 4 | Studio và luồng B (phân tích, demo, duyệt, gửi) | Chưa bắt đầu |
+| 5 | Hộp thư (ca, nháp, duyệt, gửi) | Chưa bắt đầu |
+| 6 | Lịch và nhắc việc | Chưa bắt đầu |
+| 7 | Cài đặt và nhật ký | Chưa bắt đầu |
+| 8 | Luồng A: nhận ca từ Business AI (có điều kiện) | Chờ kết quả test Conversation Routing |
+| 9 | Phát hành: chính sách, App Review, APK release | Chưa bắt đầu |
 
-## Thiết lập
+## Tài liệu
 
-### 1. Business Suite (chủ tiệm)
-- Dán prompt CSKH trong [docs/business-ai-prompt.md](docs/business-ai-prompt.md) (có thể sao chép trực tiếp từ mục Cài đặt trong app).
-- Bật **"Take control of conversations with your Business Agent"** cho ứng dụng.
+| File | Nội dung |
+|---|---|
+| [docs/SPEC.md](docs/SPEC.md) | Phạm vi, màn hình, quyền, quy tắc Gemini, nghiệp vụ |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Luồng dữ liệu, ranh giới Meta và Gemini |
+| [docs/BUILD.md](docs/BUILD.md) | CI, môi trường, bảng secret và biến, lockfile |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Mở tiệm, xoay khóa, failover Gemini, rollback, sự cố |
+| [docs/TEST-PLAN.md](docs/TEST-PLAN.md) | Tiêu chí và kết quả kiểm thử theo phase |
+| [docs/PRIVACY.md](docs/PRIVACY.md) | Dữ liệu thu thập, bên xử lý, thời hạn lưu, cách xóa |
+| [docs/meta-setup.md](docs/meta-setup.md) | Cấu hình app Meta, Conversation routing, webhook |
+| [docs/business-ai-prompt.md](docs/business-ai-prompt.md) | Prompt dán trong Business Suite |
 
-### 2. Meta for Developers
-- Thêm nền tảng Android: package `vn.pyincc.aicrm`, class `vn.pyincc.aicrm.MainActivity`, key hash đúng keystore đã ký APK.
-- Đặt ứng dụng làm **default app** trong Conversation routing của Page test.
-- Subscribe webhook: `messages`, `messaging_handover`, `standby`, `messaging_postbacks`, `messaging_referral`.
+## Cấu trúc repo
 
-### 3. Supabase
-- Chạy `database/schema.sql`, rồi lần lượt các file trong `database/migrations/`.
-- Đảm bảo **RLS = `true`** cho mọi bảng trong schema `public`.
-- Bucket `customer-media` ở chế độ **private**.
+```
+.github/workflows/build.yml     CI: pub get (lockfile), analyze, test thuần logic, build APK debug
+.github/workflows/release.yml   Release: APK ký, deploy backend production (environment có người duyệt)
+mobile_app/                     App Flutter (Android, iOS)
+backend_bridge/meta-webhook/    Backend Express (index.js), package.json, package-lock.json
+database/schema.sql             Schema cho project mới
+database/migrations/            Migration tiến, đánh số theo ngày, không sửa file cũ
+render.yaml                     Blueprint Render cho backend
+scripts/smoke.sh                Kiểm tra sau deploy
+docs/                           Tài liệu chuẩn (xem bảng trên)
+```
 
-### 4. Render (backend `backend_bridge/meta-webhook`)
-- Biến bí mật (chỉ đặt trong Render Dashboard): `SUPABASE_SERVICE_ROLE_KEY`, `META_APP_SECRET`, `VERIFY_TOKEN`, `PAGE_TOKEN_ENC_KEY`, `GEMINI_API_KEY`.
-- Biến cấu hình: `NODE_ENV=production`, `SUPABASE_URL`, `SUPABASE_STORAGE_BUCKET`, `META_APP_ID`, `META_GRAPH_API_VERSION`, `PUBLIC_BASE_URL`, `BOOTSTRAP_OWNER_EMAIL`.
-- **Không đặt** `DEFAULT_ORG_ID`, `PAGE_ID`, `PAGE_ACCESS_TOKEN`, `API_KEY` cho production.
+## Chạy trên máy
 
-### 5. Build APK (GitHub Actions)
-- CI chạy `node --check`, `node --test`, `flutter analyze --no-fatal-infos`, `flutter test`, rồi build `app-debug.apk`.
-- APK chỉ nhận `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `TRYON_API_URL` (không bao giờ nhúng `SERVICE_ROLE`, `META_APP_SECRET`, `GEMINI_API_KEY`).
+**App**
+```bash
+cd mobile_app
+flutter pub get --enforce-lockfile
+flutter analyze --no-fatal-infos
+flutter run \
+  --dart-define=SUPABASE_URL=<URL> \
+  --dart-define=SUPABASE_ANON_KEY=<PUBLISHABLE_KEY> \
+  --dart-define=TRYON_API_URL=<BACKEND_URL>
+```
 
-## Bảo mật và quyền riêng tư
+**Backend**
+```bash
+cd backend_bridge/meta-webhook
+cp .env.example .env     # điền giá trị thật, không commit
+npm ci
+npm start
+curl http://localhost:3000/health
+```
 
-- Mọi khóa bí mật chỉ nằm trên Render và Supabase Secrets.
-- Ảnh khuôn mặt khách chỉ xử lý khi có xác nhận đồng ý, đã xóa siêu dữ liệu EXIF/GPS trước khi tải lên, lưu private và truy cập qua signed URL 1 giờ.
-- Gemini không tự gửi nội dung ra ngoài ứng dụng; mọi tin gửi đi đều đi qua nút Duyệt của chủ tiệm.
-- Xem chi tiết tại `/privacy`, `/terms`, `/data-deletion` trên backend.
+Chi tiết biến và secret: [docs/BUILD.md](docs/BUILD.md).
+
+## Bảo mật
+
+- Khóa bí mật chỉ nằm trên Render và Supabase Secrets. APK chỉ chứa URL và publishable key.
+- Không đưa `SUPABASE_SERVICE_ROLE_KEY`, `META_APP_SECRET`, `GEMINI_*`, `PAGE_ACCESS_TOKEN` vào APK, vào repo, vào chat hay vào tài liệu.
+- Repo đang công khai: mọi khóa đã từng xuất hiện trong commit hoặc chat cần được thu hồi và thay mới. Quy trình ở [docs/RUNBOOK.md](docs/RUNBOOK.md).
+- Ảnh khách là dữ liệu nhạy cảm: chỉ xử lý khi khách đồng ý, lưu bucket riêng tư, truy cập qua signed URL có thời hạn. Chi tiết: [docs/PRIVACY.md](docs/PRIVACY.md).
+- Không đưa ảnh khuôn mặt thật, token, PSID thật vào repo hoặc tài liệu.
+
+## Giới hạn đã biết
+
+- Gửi tin qua Messenger chỉ trong 24 giờ kể từ tin cuối của khách, trừ khi dùng tag hợp lệ.
+- Chưa có model tạo ảnh demo. Nút tạo ảnh bị ẩn cho đến khi có model.
+- Chuyển ca từ Business AI (luồng A) chỉ hoạt động khi Conversation Routing đã được kiểm thử trên Page thật hoặc Page test.
+- Chế độ Development chỉ cho tài khoản tester. Người ngoài cần App Review cho `pages_messaging` và `pages_manage_metadata`.
+
+## Giấy phép
+
+Mã nguồn đang trong giai đoạn phát triển nội bộ. Chưa có giấy phép phát hành.

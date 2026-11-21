@@ -8,16 +8,17 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/errors/image_prepare_exception.dart';
 import '../../core/errors/user_message.dart';
 import '../../core/theme/app_theme.dart';
+import '../../services/catalog_service.dart';
 import '../../services/handoff_service.dart';
 
 class _Item {
   const _Item(this.id, this.name, this.category);
   final String id;
   final String name;
-  final String category; // 'eyebrow' | 'lip'
+  final String category; // 'eyebrow' | 'lip' | 'other'
 }
 
-const _catalog = <_Item>[
+const _defaultCatalog = <_Item>[
   _Item('1', 'Mày sợi Hairstroke Nâu Tây', 'eyebrow'),
   _Item('2', 'Mày Shading Ombre', 'eyebrow'),
   _Item('3', 'Môi Collagen Cam Đào', 'lip'),
@@ -28,11 +29,15 @@ class TryOnStudioScreen extends StatefulWidget {
   const TryOnStudioScreen({
     super.key,
     required this.handoffService,
+    this.catalogService,
+    this.catalogVersion = 0,
     this.customerName,
     this.onSignOut,
   });
 
   final HandoffService handoffService;
+  final CatalogService? catalogService;
+  final int catalogVersion;
   final String? customerName;
   final VoidCallback? onSignOut;
 
@@ -43,12 +48,43 @@ class TryOnStudioScreen extends StatefulWidget {
 class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   final _picker = ImagePicker();
 
+  List<_Item> _catalog = _defaultCatalog;
   File? _image;
   HandoffCase? _caseResult;
   String _filter = 'all';
   String? _selectedId;
   bool _busy = false;
   bool _approved = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCatalog();
+  }
+
+  @override
+  void didUpdateWidget(covariant TryOnStudioScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.catalogVersion != oldWidget.catalogVersion) {
+      _loadCatalog();
+    }
+  }
+
+  Future<void> _loadCatalog() async {
+    final svc = widget.catalogService;
+    if (svc == null) return;
+    try {
+      final live = await svc.fetchItems();
+      if (!mounted || live.isEmpty) return;
+      setState(() {
+        _catalog = live
+            .map((e) => _Item(e.id, e.name, e.category))
+            .toList();
+      });
+    } catch (_) {
+      // Giữ danh mục tham khảo mặc định khi ngoại tuyến hoặc chưa cấu hình
+    }
+  }
 
   List<_Item> get _visible => _filter == 'all'
       ? _catalog
@@ -162,7 +198,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     if (mounted) {
       showAppMessage(
         context,
-        'Đã sao chép gợi ý để nhân viên kiểm tra trước khi tư vấn.',
+        'Đã sao chép gợi ý để chủ tiệm kiểm tra trước khi tư vấn.',
       );
     }
   }
@@ -215,7 +251,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
             _catalogSection(),
             const SizedBox(height: 16),
             const Text(
-              'Kết quả chỉ là gợi ý nội bộ. Nhân viên xác nhận trước khi tư vấn cho khách.',
+              'Kết quả chỉ là gợi ý nội bộ. Chủ tiệm xác nhận trước khi tư vấn cho khách.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: AppColors.textMuted),
             ),
@@ -343,17 +379,20 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   }
 
   Widget _catalogSection() {
+    final hasOther = _catalog.any((e) => e.category == 'other');
+    final filters = <(String, String)>[
+      ('all', 'Tất cả'),
+      ('eyebrow', 'Chân mày'),
+      ('lip', 'Môi'),
+      if (hasOther) ('other', 'Khác'),
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Wrap(
           spacing: 8,
           children: [
-            for (final f in const [
-              ('all', 'Tất cả'),
-              ('eyebrow', 'Chân mày'),
-              ('lip', 'Môi'),
-            ])
+            for (final f in filters)
               ChoiceChip(
                 label: Text(f.$2),
                 selected: _filter == f.$1,
