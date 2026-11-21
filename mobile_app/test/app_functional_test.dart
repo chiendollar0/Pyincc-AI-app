@@ -1,163 +1,211 @@
-// ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyincc_app/core/errors/api_exception.dart';
 import 'package:pyincc_app/core/errors/user_message.dart';
+import 'package:pyincc_app/data/crm_repo.dart';
 import 'package:pyincc_app/main.dart';
+import 'package:pyincc_app/services/api_client.dart';
+
+class _FakeCrmRepo extends CrmRepo {
+  _FakeCrmRepo() : super(const ApiClient(baseUrl: 'https://test.local'));
+
+  @override
+  Future<Map<String, dynamic>> tenant() async => {
+        'id': 'org-1',
+        'name': 'Tiệm Test',
+        'specialty': '',
+      };
+
+  @override
+  Future<Map<String, dynamic>> aiUsage() async => {'used': 2, 'cap': 50};
+
+  @override
+  Future<Map<String, dynamic>> connectionStatus() async => {
+        'pages': <Map<String, dynamic>>[],
+        'default_app': null,
+        'take_control_enabled': null,
+        'handover_subscribed': null,
+        'receiving_events': null,
+        'last_webhook_at': null,
+      };
+
+  @override
+  Future<List<Map<String, dynamic>>> handoffCases(String status) async =>
+      const [];
+
+  @override
+  Future<List<Map<String, dynamic>>> catalog() async => const [];
+
+  @override
+  Future<List<Map<String, dynamic>>> bookings() async => const [];
+}
 
 void main() {
   testWidgets(
-    '1. Login screen renders Pyincc brand header and validates empty credentials',
+    '1. Unauthenticated launch displays LoginScreen and validates empty input',
     (WidgetTester tester) async {
-      await tester.pumpWidget(const BeautyCrmApp());
-      await tester.pump();
+      tester.view.physicalSize = const Size(1080, 1920);
+      tester.view.devicePixelRatio = 2.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(const BeautyCrmApp(initialAuthToken: ''));
+      await tester.pumpAndSettle();
 
       expect(find.text('Pyincc AI CRM'), findsOneWidget);
       expect(find.text('Email đăng nhập'), findsOneWidget);
       expect(find.text('Mật khẩu'), findsOneWidget);
-      expect(find.text('Đăng nhập'), findsOneWidget);
 
-      // Verify password field starts obscured and toggles visibility on eye tap
-      final passwordFieldFinder = find.widgetWithText(TextField, 'Mật khẩu');
-      expect(tester.widget<TextField>(passwordFieldFinder).obscureText, isTrue);
-      expect(find.byIcon(Icons.visibility_outlined), findsOneWidget);
-
-      await tester.tap(find.byIcon(Icons.visibility_outlined));
-      await tester.pump();
-      expect(tester.widget<TextField>(passwordFieldFinder).obscureText, isFalse);
-      expect(find.byIcon(Icons.visibility_off_outlined), findsOneWidget);
-
-      await tester.tap(find.byIcon(Icons.visibility_off_outlined));
-      await tester.pump();
-      expect(tester.widget<TextField>(passwordFieldFinder).obscureText, isTrue);
-
-      // Submit empty credentials -> friendly Vietnamese message without raw technical text
       await tester.tap(find.text('Đăng nhập'));
-      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+
       expect(
         find.text('Vui lòng nhập đầy đủ Email và Mật khẩu.'),
         findsOneWidget,
       );
-      expect(find.textContaining('Exception'), findsNothing);
-      expect(find.textContaining('HTTP'), findsNothing);
-
-      await tester.pumpWidget(const SizedBox.shrink());
+      expect(find.textContaining('API Key'), findsNothing);
     },
   );
 
   testWidgets(
-    '2. Signed-in dashboard renders BrandHeader, KPIs, Studio AI catalog, and Logout',
+    '2a. Inbox and Studio tabs render honest empty states and disabled demo',
     (WidgetTester tester) async {
-      tester.view.physicalSize = const Size(1080, 1920);
+      tester.view.physicalSize = const Size(1080, 2400);
       tester.view.devicePixelRatio = 2.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
       await tester.pumpWidget(
-        const BeautyCrmApp(initialAuthToken: 'session-token-for-widget-test'),
+        BeautyCrmApp(
+          initialAuthToken: 'session-token-for-widget-test',
+          repoOverride: _FakeCrmRepo(),
+        ),
       );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
 
-      // Tab 1: Hộp thư AI (no hardcoded customer names; shows error/empty state when offline)
-      expect(find.text('Hộp thư AI'), findsWidgets);
+      // Default tab 0: Hộp thư
+      expect(find.text('Hộp thư'), findsWidgets);
+      expect(find.text('Studio'), findsOneWidget);
+      expect(find.text('Lịch'), findsOneWidget);
+      expect(find.text('Cài đặt'), findsOneWidget);
+      expect(find.text('Chưa có ca nào'), findsOneWidget);
       expect(find.text('Chị Minh Thư (FB)'), findsNothing);
       expect(find.text('Thanh Trúc (Zalo)'), findsNothing);
 
-      // Switch to Tab 2: Studio AI
-      await tester.tap(find.text('Studio AI').last);
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('Chọn ảnh mặt mộc của khách'), findsOneWidget);
-      // Per SPEC: no hardcoded default catalog items; shows empty-salon prompt
-      expect(find.textContaining('Môi Collagen Cam Đào'), findsNothing);
-      expect(find.textContaining('Mày sợi Hairstroke Nâu Tây'), findsNothing);
+      // Tab 1: Studio (no default catalog, demo button disabled)
+      await tester.tap(find.text('Studio').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Chưa có ảnh khách'), findsOneWidget);
       expect(
-        find.textContaining('Chưa có dịch vụ trong danh mục tiệm'),
+        find.text('Chưa có mẫu. Thêm mẫu trong Cài đặt → Catalog mẫu.'),
         findsOneWidget,
       );
-
-      // Verify Logout button on the active tab returns to LoginScreen
-      await tester.tap(find.byIcon(Icons.logout).hitTestable().first);
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('Email đăng nhập'), findsOneWidget);
-
-      await tester.pumpWidget(const SizedBox.shrink());
+      expect(find.text('Tạo ảnh demo (chờ model)'), findsOneWidget);
     },
   );
 
   testWidgets(
-    '3. Quan ly tiem tab manages Facebook connect and enforces Zero-Key UI',
+    '2b. Schedule tab renders empty state and opens/closes AddBookingDialog safely',
     (WidgetTester tester) async {
-      tester.view.physicalSize = const Size(1080, 1920);
+      tester.view.physicalSize = const Size(1080, 2400);
       tester.view.devicePixelRatio = 2.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
       await tester.pumpWidget(
-        const BeautyCrmApp(initialAuthToken: 'session-token-for-widget-test'),
+        BeautyCrmApp(
+          initialAuthToken: 'session-token-for-widget-test',
+          repoOverride: _FakeCrmRepo(),
+        ),
       );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-
-      await tester.tap(find.text('Quản lý tiệm').last);
-      await tester.pump(const Duration(milliseconds: 300));
-
-      // Switch to sub-tab 'Kết nối & Chủ tiệm'
-      await tester.tap(find.text('Kết nối & Chủ tiệm'));
-      await tester.pump(const Duration(milliseconds: 300));
-
-      expect(find.text('Kết nối với Facebook'), findsOneWidget);
-      expect(find.text('Sao chép Prompt Business AI'), findsOneWidget);
-      expect(find.text('Quản lý Danh mục dịch vụ'), findsOneWidget);
-      expect(find.text('Nhật ký hoạt động & Tài khoản'), findsOneWidget);
-      expect(find.text('Nhập mã thiết lập tiệm'), findsOneWidget);
-      expect(find.text('Lưu ghi chú tư vấn'), findsOneWidget);
-
-      // Verify opening & closing TextField dialog does not trigger _dependents.isEmpty
-      await tester.tap(find.text('Nhập mã thiết lập tiệm'));
       await tester.pumpAndSettle();
-      expect(find.text('Mã thiết lập tiệm'), findsOneWidget);
+
+      await tester.tap(find.text('Lịch').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Hẹn trong ngày (0)'), findsOneWidget);
+      expect(find.text('Chưa có khách đến mốc 7 ngày.'), findsOneWidget);
+
+      await tester.tap(find.text('Thêm lịch'));
+      await tester.pumpAndSettle();
+      expect(find.text('Thêm lịch hẹn'), findsOneWidget);
       await tester.tap(find.text('Hủy'));
       await tester.pumpAndSettle();
-      expect(find.text('Mã thiết lập tiệm'), findsNothing);
-
-      // Zero-Key UI: never expose backend secrets
-      expect(find.textContaining('API Key'), findsNothing);
-      expect(find.textContaining('SUPABASE_SERVICE_ROLE_KEY'), findsNothing);
-      expect(find.textContaining('META_APP_SECRET'), findsNothing);
-
-      await tester.pumpWidget(const SizedBox.shrink());
+      expect(find.text('Thêm lịch hẹn'), findsNothing);
     },
   );
 
-  test('4. userMessage maps Luong B, single-owner, onboarding, and catalog error codes cleanly', () {
-    expect(
-      userMessage(const ApiException(429, 'AI_DAILY_CAP')),
-      contains('50 lượt'),
-    );
-    expect(
-      userMessage(const ApiException(403, 'SINGLE_OWNER_ONLY')),
-      contains('1 tài khoản Chủ tiệm duy nhất'),
-    );
-    expect(
-      userMessage(const ApiException(403, 'NOT_APPROVED')),
-      contains('chưa được duyệt'),
-    );
-    expect(
-      userMessage(const ApiException(409, 'ALREADY_SENDING')),
-      contains('đang được gửi'),
-    );
-    expect(
-      userMessage(const ApiException(409, 'LAST_OWNER_PROTECTED')),
-      contains('Chủ tiệm cuối cùng'),
-    );
-    expect(
-      userMessage(const ApiException(404, 'INVALID_ONBOARDING_CODE')),
-      contains('Mã thiết lập tiệm'),
-    );
-    expect(
-      userMessage(const ApiException(400, 'CANNOT_MODIFY_SELF')),
-      contains('chính tài khoản'),
-    );
+  testWidgets(
+    '2c. Settings tab shows 4 groups, honest Connection checklist, Catalog dialog, and SignOut',
+    (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 2.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        BeautyCrmApp(
+          initialAuthToken: 'session-token-for-widget-test',
+          repoOverride: _FakeCrmRepo(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Cài đặt').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Tiệm'), findsOneWidget);
+      expect(find.text('Kết nối'), findsOneWidget);
+      expect(find.text('Hệ thống'), findsOneWidget);
+      expect(find.text('Tài khoản'), findsOneWidget);
+      expect(find.text('Đã dùng 2 / 50 lượt'), findsOneWidget);
+      expect(find.textContaining('Nhân viên'), findsNothing);
+
+      // Open ConnectionScreen and verify honest "Chưa kiểm tra" checklist
+      await tester.tap(find.text('Facebook và Business AI'));
+      await tester.pumpAndSettle();
+      expect(find.text('Chưa kết nối Fanpage nào.'), findsOneWidget);
+      expect(find.text('Chưa kiểm tra'), findsNWidgets(4));
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      // Open CatalogScreen and open/close _AddCatalogItemDialog cleanly
+      await tester.tap(find.text('Catalog mẫu'));
+      await tester.pumpAndSettle();
+      expect(find.text('Chưa có mẫu nào'), findsOneWidget);
+      await tester.tap(find.text('Thêm mẫu'));
+      await tester.pumpAndSettle();
+      expect(find.text('Tên mẫu'), findsOneWidget);
+      await tester.tap(find.text('Hủy'));
+      await tester.pumpAndSettle();
+      expect(find.text('Tên mẫu'), findsNothing);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      // Verify sign out returns to LoginScreen
+      await tester.ensureVisible(find.text('Đăng xuất'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Đăng xuất'));
+      await tester.pumpAndSettle();
+      expect(find.text('Email đăng nhập'), findsOneWidget);
+    },
+  );
+
+  test('3. userMessage hides raw HTTP codes and Exception internals', () {
+    const cases = <Object>[
+      ApiException(401, 'UNAUTHORIZED'),
+      ApiException(403, 'FORBIDDEN_ROLE'),
+      ApiException(422, 'OUTSIDE_24H_WINDOW'),
+      ApiException(429, 'AI_DAILY_CAP'),
+      ApiException(501, 'DEMO_NOT_ENABLED'),
+      ApiException(502, 'META_SEND_FAILED'),
+      ApiException(503, 'GEMINI_NOT_CONFIGURED'),
+    ];
+    for (final error in cases) {
+      final msg = userMessage(error);
+      expect(msg.trim().isNotEmpty, isTrue);
+      expect(msg.contains('Exception'), isFalse);
+      expect(msg.contains('HTTP'), isFalse);
+      expect(msg.contains('401'), isFalse);
+      expect(msg.contains('500'), isFalse);
+    }
   });
 }

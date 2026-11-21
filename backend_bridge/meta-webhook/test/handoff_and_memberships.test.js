@@ -208,7 +208,12 @@ function createMockEnv() {
       },
       in(col, list) {
         const set = new Set(list.map(String));
-        filters.push((r) => set.has(String(r[col] ?? '')));
+        if (col.includes('->>')) {
+          const [jsonCol, key] = col.split('->>');
+          filters.push((r) => set.has(String(r[jsonCol]?.[key] ?? '')));
+        } else {
+          filters.push((r) => set.has(String(r[col] ?? '')));
+        }
         return q;
       },
       order(col, opts = {}) {
@@ -936,5 +941,75 @@ test('7-day booking reminders & case release: filters due follow-ups past 200 ol
   const rejFailed = await invoke('POST', '/handoff-cases/case-failed-1/reject', { token: tokens.ownerToken });
   assert.equal(rejFailed.statusCode, 200);
   assert.equal(rejFailed.body.status, 'rejected');
+});
+
+test('UI v2 endpoints: /tenant, /ai-usage, /connection/status (honest nulls), and /catalog group_label + active toggle', async () => {
+  const { state, invoke, tokens } = createMockEnv();
+
+  // GET & PUT /tenant
+  const t1 = await invoke('GET', '/tenant', { token: tokens.ownerToken });
+  assert.equal(t1.statusCode, 200);
+  assert.equal(t1.body.name, 'PYINCC Test Salon');
+
+  const t2 = await invoke('PUT', '/tenant', {
+    token: tokens.ownerToken,
+    body: { name: 'PYINCC Beauty Studio', specialty: 'Phun môi, sửa mày trổ' },
+  });
+  assert.equal(t2.statusCode, 200);
+  assert.equal(t2.body.name, 'PYINCC Beauty Studio');
+  assert.equal(t2.body.specialty, 'Phun môi, sửa mày trổ');
+
+  // GET /ai-usage
+  const usage = await invoke('GET', '/ai-usage', { token: tokens.ownerToken });
+  assert.equal(usage.statusCode, 200);
+  assert.equal(usage.body.used, 0);
+  assert.equal(usage.body.cap, 50);
+
+  // GET /connection/status: must return null for unverifiable Business Suite flags
+  const conn = await invoke('GET', '/connection/status', { token: tokens.ownerToken });
+  assert.equal(conn.statusCode, 200);
+  assert.equal(conn.body.pages.length, 1);
+  assert.equal(conn.body.default_app, null);
+  assert.equal(conn.body.take_control_enabled, null);
+  assert.equal(conn.body.handover_subscribed, null);
+  assert.equal(conn.body.receiving_events, false);
+  assert.equal(conn.body.last_webhook_at, null);
+
+  // Even when 40 newer webhook events belong to another page, tenant's own event within 24h is found
+  const ownEventTime = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+  state.tables.webhook_events = [
+    ...Array.from({ length: 40 }, (_, i) => ({
+      id: `other-ev-${i}`,
+      received_at: new Date(Date.now() - (i + 1) * 1000).toISOString(),
+      raw_payload: { pageId: 'other-page-999' },
+    })),
+    {
+      id: 'own-ev-1',
+      received_at: ownEventTime,
+      raw_payload: { pageId: 'page-test-1' },
+    },
+  ];
+  const conn2 = await invoke('GET', '/connection/status', { token: tokens.ownerToken });
+  assert.equal(conn2.statusCode, 200);
+  assert.equal(conn2.body.receiving_events, true);
+  assert.equal(conn2.body.last_webhook_at, ownEventTime);
+
+  // POST /catalog with group_label (no price) + PUT toggle active: false
+  const created = await invoke('POST', '/catalog', {
+    token: tokens.ownerToken,
+    body: { name: 'Mày sợi tự nhiên', group_label: 'Chân mày', description: 'Tự nhiên' },
+  });
+  assert.equal(created.statusCode, 201);
+  assert.equal(created.body.item.category, 'eyebrow');
+  assert.equal(created.body.item.group_label, 'Chân mày');
+  assert.equal(created.body.item.active, true);
+  assert.equal('price' in created.body.item, false);
+
+  const toggled = await invoke('PUT', `/catalog/${created.body.item.id}`, {
+    token: tokens.ownerToken,
+    body: { active: false },
+  });
+  assert.equal(toggled.statusCode, 200);
+  assert.equal(toggled.body.item.active, false);
 });
 

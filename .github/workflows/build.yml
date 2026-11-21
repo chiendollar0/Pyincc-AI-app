@@ -48,7 +48,21 @@ jobs:
 
       - name: Run tests
         working-directory: mobile_app
-        run: flutter test
+        run: |
+          set +e
+          flutter test --reporter=expanded > /tmp/flutter_test.log 2>&1
+          code=$?
+          cat /tmp/flutter_test.log
+          if [ $code -ne 0 ]; then
+            awk '
+              /\[E\]/ { print; next }
+              /The following .* was thrown/ { c=4; next }
+              c>0 { print; c-- }
+            ' /tmp/flutter_test.log | head -n 10 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+          fi
+          exit $code
 
       - name: Build debug APK
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

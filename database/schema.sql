@@ -1,6 +1,7 @@
 create table if not exists public.organizations (
   id uuid primary key default gen_random_uuid(),
   name text not null,
+  specialty text,
   created_at timestamptz default now()
 );
 
@@ -24,8 +25,10 @@ create table if not exists public.catalog_items (
   id uuid primary key default gen_random_uuid(),
   org_id uuid references public.organizations(id) on delete cascade,
   category text check (category in ('eyebrow','lip','other')) not null,
+  group_label text not null default 'Khác',
   name text not null,
   description text,
+  active boolean not null default true,
   price numeric,
   image_url text,
   updated_at timestamptz not null default now()
@@ -151,6 +154,7 @@ create table if not exists public.bookings (
   technician_id uuid references public.users(id),
   scheduled_at timestamptz not null,
   service_date date,
+  follow_up_due date,
   followup_done boolean not null default false,
   notes text,
   status text check (status in ('pending','confirmed','done','cancelled')) default 'pending'

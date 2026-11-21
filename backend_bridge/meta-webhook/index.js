@@ -772,32 +772,156 @@ app.post('/onboarding/claim', authWriteLimiter, requireSupabaseUser, express.jso
   return res.json({ success: true, org_id: orgId, org_name: claimed.org_name, role: 'owner' });
 }));
 
+function inferCatalogCategory(groupLabel, explicitCategory) {
+  const cleanExplicit = String(explicitCategory || '').trim().toLowerCase();
+  if (['eyebrow', 'lip', 'other'].includes(cleanExplicit)) return cleanExplicit;
+  const g = String(groupLabel || '').trim().toLowerCase();
+  if (g.includes('mày') || g.includes('may') || g.includes('brow')) return 'eyebrow';
+  if (g.includes('môi') || g.includes('moi') || g.includes('lip')) return 'lip';
+  return 'other';
+}
+
+function defaultGroupLabelForCategory(category) {
+  if (category === 'eyebrow') return 'Chân mày';
+  if (category === 'lip') return 'Môi';
+  return 'Khác';
+}
+
+app.get('/tenant', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
+  const { data, error } = await supabase.from('organizations')
+    .select('id, name, specialty')
+    .eq('id', req.orgId)
+    .maybeSingle();
+  if (error || !data) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
+  return res.json({
+    id: data.id,
+    name: String(data.name || ''),
+    specialty: String(data.specialty || ''),
+  });
+}));
+
+app.put('/tenant', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '8kb' }), asyncHandler(async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const specialty = typeof req.body?.specialty === 'string' ? req.body.specialty.trim() : '';
+  if (!name || name.length > 160) return res.status(400).json({ error: 'TENANT_NAME_INVALID' });
+  if (specialty.length > 300) return res.status(400).json({ error: 'TENANT_SPECIALTY_INVALID' });
+  const { data, error } = await supabase.from('organizations')
+    .update({ name, specialty })
+    .eq('id', req.orgId)
+    .select('id, name, specialty')
+    .maybeSingle();
+  if (error || !data) return res.status(500).json({ error: 'Failed to update tenant' });
+  await recordAuditLog({
+    orgId: req.orgId,
+    actorUserId: req.authUser.id,
+    actorRole: req.userRole,
+    action: 'tenant.update',
+    targetType: 'organization',
+    targetId: req.orgId,
+    metadata: { name },
+  });
+  return res.json({
+    success: true,
+    id: data.id,
+    name: String(data.name || ''),
+    specialty: String(data.specialty || ''),
+  });
+}));
+
+app.get('/ai-usage', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
+  const used = await dailyAiCount(req.orgId);
+  return res.json({ used, cap: HANDOFF_DAILY_AI_CAP });
+}));
+
+app.get('/connection/status', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
+  const { data: pageRows, error: pageErr } = await supabase.from('connected_pages')
+    .select('page_id, page_name, connected_at, updated_at')
+    .eq('org_id', req.orgId)
+    .order('updated_at', { ascending: false });
+  if (pageErr) return res.status(500).json({ error: 'Failed to load connection status' });
+  const pages = Array.isArray(pageRows) ? pageRows : [];
+  const pageIds = new Set(pages.map((p) => String(p.page_id || '')).filter(Boolean));
+
+  let lastWebhookAt = null;
+  if (webhookDiagnostics.lastReceivedAt && webhookDiagnostics.lastPageId && pageIds.has(String(webhookDiagnostics.lastPageId))) {
+    lastWebhookAt = webhookDiagnostics.lastReceivedAt;
+  }
+  if (!lastWebhookAt && pageIds.size > 0) {
+    try {
+      const { data: recentEvents } = await supabase.from('webhook_events')
+        .select('received_at')
+        .in('raw_payload->>pageId', Array.from(pageIds))
+        .order('received_at', { ascending: false })
+        .limit(1);
+      if (Array.isArray(recentEvents) && recentEvents[0]?.received_at) {
+        lastWebhookAt = recentEvents[0].received_at;
+      }
+    } catch (_) {
+      // Keep lastWebhookAt null if diagnostics table is unavailable
+    }
+  }
+
+  let receivingEvents = null;
+  if (pages.length > 0) {
+    const lastMs = lastWebhookAt ? Date.parse(lastWebhookAt) : Number.NaN;
+    receivingEvents = Number.isFinite(lastMs) && (Date.now() - lastMs) <= 24 * 3600 * 1000;
+  }
+
+  // Never guess Meta Business Suite routing flags; return null when not directly verifiable via API
+  return res.json({
+    pages,
+    default_app: null,
+    take_control_enabled: null,
+    handover_subscribed: null,
+    receiving_events: receivingEvents,
+    last_webhook_at: lastWebhookAt,
+  });
+}));
+
 app.get('/catalog', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from('catalog_items')
-    .select('id, category, name, description, image_url, updated_at')
+    .select('id, category, group_label, name, description, active, image_url, updated_at')
     .eq('org_id', req.orgId)
     .order('name', { ascending: true });
   if (error) return res.status(500).json({ error: 'Failed to load catalog' });
-  return res.json({ items: data || [] });
+  const items = (data || []).map((row) => ({
+    id: row.id,
+    category: row.category || 'other',
+    group_label: row.group_label || defaultGroupLabelForCategory(row.category),
+    name: row.name,
+    description: row.description ?? '',
+    active: row.active !== false,
+    image_url: row.image_url ?? null,
+    updated_at: row.updated_at,
+  }));
+  return res.json({ items });
 }));
 
 app.post('/catalog', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const name = String(req.body?.name || '').trim();
-  const category = String(req.body?.category || 'other').trim().toLowerCase();
+  const rawGroupLabel = String(req.body?.group_label || '').trim();
+  const category = inferCatalogCategory(rawGroupLabel, req.body?.category);
+  const groupLabel = rawGroupLabel || defaultGroupLabelForCategory(category);
   const description = typeof req.body?.description === 'string' ? req.body.description.trim() : null;
+  const active = typeof req.body?.active === 'boolean' ? req.body.active : true;
   const imageUrl = typeof req.body?.image_url === 'string' ? req.body.image_url.trim() || null : null;
   if (!name || name.length > 160) return res.status(400).json({ error: 'CATALOG_NAME_INVALID' });
-  if (!['eyebrow', 'lip', 'other'].includes(category)) return res.status(400).json({ error: 'CATALOG_CATEGORY_INVALID' });
+  if (groupLabel.length > 60) return res.status(400).json({ error: 'CATALOG_GROUP_INVALID' });
+  if (req.body?.category !== undefined && !['eyebrow', 'lip', 'other'].includes(String(req.body.category).trim().toLowerCase())) {
+    return res.status(400).json({ error: 'CATALOG_CATEGORY_INVALID' });
+  }
   const { data, error } = await supabase.from('catalog_items')
     .insert({
       org_id: req.orgId,
       category,
+      group_label: groupLabel,
       name,
       description,
+      active,
       image_url: imageUrl,
       updated_at: new Date().toISOString(),
     })
-    .select('id, category, name, description, image_url, updated_at')
+    .select('id, category, group_label, name, description, active, image_url, updated_at')
     .single();
   if (error || !data) return res.status(500).json({ error: 'Failed to create catalog item' });
   await recordAuditLog({
@@ -807,23 +931,55 @@ app.post('/catalog', writeLimiter, requireAuth, requireRole('owner'), express.js
     action: 'catalog.create',
     targetType: 'catalog_item',
     targetId: data.id,
-    metadata: { name, category },
+    metadata: { name, category, group_label: groupLabel },
   });
   return res.status(201).json({ success: true, item: data });
 }));
 
 app.put('/catalog/:id', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
-  const name = String(req.body?.name || '').trim();
-  const category = String(req.body?.category || 'other').trim().toLowerCase();
-  const description = typeof req.body?.description === 'string' ? req.body.description.trim() : null;
-  const imageUrl = typeof req.body?.image_url === 'string' ? req.body.image_url.trim() || null : null;
-  if (!name || name.length > 160) return res.status(400).json({ error: 'CATALOG_NAME_INVALID' });
-  if (!['eyebrow', 'lip', 'other'].includes(category)) return res.status(400).json({ error: 'CATALOG_CATEGORY_INVALID' });
+  const updates = { updated_at: new Date().toISOString() };
+  let hasChanges = false;
+  if (req.body?.name !== undefined) {
+    const name = String(req.body.name || '').trim();
+    if (!name || name.length > 160) return res.status(400).json({ error: 'CATALOG_NAME_INVALID' });
+    updates.name = name;
+    hasChanges = true;
+  }
+  if (req.body?.group_label !== undefined) {
+    const groupLabel = String(req.body.group_label || '').trim() || 'Khác';
+    if (groupLabel.length > 60) return res.status(400).json({ error: 'CATALOG_GROUP_INVALID' });
+    updates.group_label = groupLabel;
+    if (req.body?.category === undefined) {
+      updates.category = inferCatalogCategory(groupLabel);
+    }
+    hasChanges = true;
+  }
+  if (req.body?.category !== undefined) {
+    const category = String(req.body.category || '').trim().toLowerCase();
+    if (!['eyebrow', 'lip', 'other'].includes(category)) return res.status(400).json({ error: 'CATALOG_CATEGORY_INVALID' });
+    updates.category = category;
+    hasChanges = true;
+  }
+  if (req.body?.description !== undefined) {
+    updates.description = typeof req.body.description === 'string' ? req.body.description.trim() : null;
+    hasChanges = true;
+  }
+  if (req.body?.active !== undefined) {
+    if (typeof req.body.active !== 'boolean') return res.status(400).json({ error: 'CATALOG_ACTIVE_INVALID' });
+    updates.active = req.body.active;
+    hasChanges = true;
+  }
+  if (req.body?.image_url !== undefined) {
+    updates.image_url = typeof req.body.image_url === 'string' ? req.body.image_url.trim() || null : null;
+    hasChanges = true;
+  }
+  if (!hasChanges) return res.status(400).json({ error: 'NO_CATALOG_UPDATES' });
+
   const { data, error } = await supabase.from('catalog_items')
-    .update({ category, name, description, image_url: imageUrl, updated_at: new Date().toISOString() })
+    .update(updates)
     .eq('id', req.params.id)
     .eq('org_id', req.orgId)
-    .select('id, category, name, description, image_url, updated_at')
+    .select('id, category, group_label, name, description, active, image_url, updated_at')
     .maybeSingle();
   if (error || !data) return res.status(404).json({ error: 'CATALOG_ITEM_NOT_FOUND' });
   await recordAuditLog({
@@ -833,7 +989,7 @@ app.put('/catalog/:id', writeLimiter, requireAuth, requireRole('owner'), express
     action: 'catalog.update',
     targetType: 'catalog_item',
     targetId: data.id,
-    metadata: { name, category },
+    metadata: { name: data.name, category: data.category, active: data.active },
   });
   return res.json({ success: true, item: data });
 }));
@@ -859,9 +1015,22 @@ app.delete('/catalog/:id', writeLimiter, requireAuth, requireRole('owner'), asyn
 
 app.get('/bookings', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from('bookings').select('*').eq('org_id', req.orgId)
-    .order('scheduled_at', { ascending: true }).limit(50);
+    .order('scheduled_at', { ascending: true }).limit(200);
   if (error) return res.status(500).json({ error: 'Failed to fetch bookings' });
-  return res.json({ bookings: data || [] });
+  const bookings = (data || []).map((b) => {
+    let followUpDue = b.follow_up_due || null;
+    if (!followUpDue && !b.followup_done && b.status === 'done') {
+      const baseDay = b.service_date || (b.scheduled_at ? vnDateString(new Date(b.scheduled_at)) : null);
+      if (baseDay) {
+        const dueDate = new Date(`${baseDay}T00:00:00+07:00`);
+        if (!Number.isNaN(dueDate.getTime())) {
+          followUpDue = vnDateString(new Date(dueDate.getTime() + 7 * 24 * 3600 * 1000));
+        }
+      }
+    }
+    return { ...b, follow_up_due: followUpDue };
+  });
+  return res.json({ bookings });
 }));
 
 // Normalizes HH:mm or ISO timestamp explicitly to Vietnam timezone (+07:00)
@@ -1219,6 +1388,8 @@ const ANALYSIS_SCHEMA = {
   type: 'OBJECT',
   properties: {
     summary: { type: 'STRING' },
+    brow_or_lip_observation: { type: 'STRING' },
+    fit_note: { type: 'STRING' },
     risk: { type: 'STRING', enum: ['low', 'medium', 'high'] },
     face_detected: { type: 'BOOLEAN' },
     recommended_item_id: { type: 'STRING' },
@@ -1229,9 +1400,10 @@ const ANALYSIS_SCHEMA = {
 
 const HANDOFF_PROMPT = [
   'Bạn là trợ lý phân tích nội bộ cho chủ tiệm thẩm mỹ/phun xăm.',
-  '- Tóm tắt ngắn gọn nhu cầu khách (summary) và đánh giá mức độ rủi ro ca làm (risk: low, medium, high — ca sửa mày trổ xanh/đỏ, sẹo, cơ địa nhạy cảm là high).',
+  '- Tóm tắt ngắn gọn nhu cầu khách (summary), mô tả quan sát dáng mày/môi/da thực tế (brow_or_lip_observation), lưu ý chuyên môn nội bộ cho chủ tiệm (fit_note), và đánh giá mức độ rủi ro ca làm (risk: low, medium, high — ca sửa mày trổ xanh/đỏ, sẹo, cơ địa nhạy cảm là high).',
   '- Nếu có ảnh: xác định face_detected (true/false) và chọn recommended_item_id phù hợp nhất trong DANH MỤC (hoặc để trống nếu không phù hợp).',
-  '- Soạn draft_reply lịch sự, tự nhiên để chủ tiệm kiểm duyệt trước khi gửi. KHÔNG tự bịa giá ngoài danh mục, KHÔNG cam kết 100% hay đảm bảo tuyệt đối.',
+  '- Nếu chủ tiệm có gửi MẪU KHÁCH CHỌN, hãy nhận xét độ phù hợp với mẫu đó trong fit_note.',
+  '- Soạn draft_reply lịch sự, tự nhiên để chủ tiệm kiểm duyệt trước khi gửi. KHÔNG tự bịa giá, KHÔNG cam kết 100% hay đảm bảo tuyệt đối.',
 ].join('\n');
 
 function detectImageMime(buf) {
@@ -1247,9 +1419,9 @@ function detectImageMime(buf) {
 
 async function loadCatalog(orgId) {
   const { data } = await supabase.from('catalog_items')
-    .select('id, name, category, description')
+    .select('id, name, category, group_label, description, active')
     .eq('org_id', orgId);
-  return Array.isArray(data) ? data : [];
+  return Array.isArray(data) ? data.filter((item) => item.active !== false) : [];
 }
 
 async function dailyAiCount(orgId, excludeCaseId = null) {
@@ -1270,7 +1442,7 @@ async function dailyAiCount(orgId, excludeCaseId = null) {
   return count || 0;
 }
 
-async function analyzeCase({ orgId, text, imageBase64, mime, catalog, excludeCaseId = null }) {
+async function analyzeCase({ orgId, text, imageBase64, mime, catalog, selectedItemId = null, excludeCaseId = null }) {
   const geminiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!geminiKey) {
     throw Object.assign(new Error('GEMINI_NOT_CONFIGURED'), { code: 'GEMINI_NOT_CONFIGURED' });
@@ -1279,9 +1451,16 @@ async function analyzeCase({ orgId, text, imageBase64, mime, catalog, excludeCas
   if (cap >= HANDOFF_DAILY_AI_CAP) {
     throw Object.assign(new Error('AI_DAILY_CAP'), { code: 'AI_DAILY_CAP' });
   }
-  const parts = [{
-    text: `${HANDOFF_PROMPT}\nDANH MỤC: ${JSON.stringify(catalog)}\nKHÁCH NÓI: ${text || '(không có)'}`,
-  }];
+  const selectedItem = selectedItemId
+    ? catalog.find((c) => String(c.id) === String(selectedItemId))
+    : null;
+  const promptLines = [
+    HANDOFF_PROMPT,
+    `DANH MỤC: ${JSON.stringify(catalog)}`,
+    ...(selectedItem ? [`MẪU KHÁCH CHỌN: ${JSON.stringify(selectedItem)}`] : []),
+    `KHÁCH NÓI / GHI CHÚ: ${text || '(không có)'}`,
+  ];
+  const parts = [{ text: promptLines.join('\n') }];
   if (imageBase64 && mime) {
     parts.push({ inline_data: { mime_type: mime, data: imageBase64 } });
   }
@@ -1341,8 +1520,12 @@ app.get('/handoff-cases', requireAuth, requireRole('owner'), asyncHandler(async 
 app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner'),
   express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
     const imageBase64 = String(req.body?.image_base64 || '').trim();
-    const customerText = typeof req.body?.customer_text === 'string' && req.body.customer_text.trim()
+    const rawText = typeof req.body?.customer_text === 'string' && req.body.customer_text.trim()
       ? req.body.customer_text.trim()
+      : (typeof req.body?.note === 'string' && req.body.note.trim() ? req.body.note.trim() : null);
+    const customerText = rawText ? rawText.slice(0, 1000) : null;
+    const selectedItemId = typeof req.body?.selected_item_id === 'string' && req.body.selected_item_id.trim()
+      ? req.body.selected_item_id.trim()
       : null;
     const psid = typeof req.body?.psid === 'string' && req.body.psid.trim()
       ? req.body.psid.trim()
@@ -1393,6 +1576,7 @@ app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner
         imageBase64,
         mime,
         catalog,
+        selectedItemId,
         excludeCaseId: row.id,
       });
       await supabase.from('handoff_cases').update({
