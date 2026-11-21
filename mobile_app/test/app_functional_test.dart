@@ -68,9 +68,9 @@ void main() {
   );
 
   testWidgets(
-    '2. Four-tab CrmShell renders honest empty states, no fake data, and crash-safe dialogs',
+    '2a. Inbox and Studio tabs render honest empty states and disabled demo',
     (WidgetTester tester) async {
-      tester.view.physicalSize = const Size(1080, 1920);
+      tester.view.physicalSize = const Size(1080, 2400);
       tester.view.devicePixelRatio = 2.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
@@ -101,8 +101,25 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Tạo ảnh demo (chờ model)'), findsOneWidget);
+    },
+  );
 
-      // Tab 2: Lịch (empty state + open/close AddBookingDialog safely)
+  testWidgets(
+    '2b. Schedule tab renders empty state and opens/closes AddBookingDialog safely',
+    (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 2.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        BeautyCrmApp(
+          initialAuthToken: 'session-token-for-widget-test',
+          repoOverride: _FakeCrmRepo(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
       await tester.tap(find.text('Lịch').last);
       await tester.pumpAndSettle();
       expect(find.text('Hẹn trong ngày (0)'), findsOneWidget);
@@ -114,13 +131,31 @@ void main() {
       await tester.tap(find.text('Hủy'));
       await tester.pumpAndSettle();
       expect(find.text('Thêm lịch hẹn'), findsNothing);
+    },
+  );
 
-      // Tab 3: Cài đặt (4 groups, no staff, honest connection checklist, crash-safe dialogs)
+  testWidgets(
+    '2c. Settings tab shows 4 groups, honest Connection checklist, Catalog dialog, and SignOut',
+    (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 2.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        BeautyCrmApp(
+          initialAuthToken: 'session-token-for-widget-test',
+          repoOverride: _FakeCrmRepo(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
       await tester.tap(find.text('Cài đặt').last);
       await tester.pumpAndSettle();
       expect(find.text('Tiệm'), findsOneWidget);
       expect(find.text('Kết nối'), findsOneWidget);
       expect(find.text('Hệ thống'), findsOneWidget);
+      expect(find.text('Tài khoản'), findsOneWidget);
       expect(find.text('Đã dùng 2 / 50 lượt'), findsOneWidget);
       expect(find.textContaining('Nhân viên'), findsNothing);
 
@@ -145,10 +180,9 @@ void main() {
       await tester.pageBack();
       await tester.pumpAndSettle();
 
-      // Scroll to Tài khoản section into visible viewport and verify sign out returns to LoginScreen
+      // Verify sign out returns to LoginScreen
       await tester.ensureVisible(find.text('Đăng xuất'));
       await tester.pumpAndSettle();
-      expect(find.text('Tài khoản'), findsOneWidget);
       await tester.tap(find.text('Đăng xuất'));
       await tester.pumpAndSettle();
       expect(find.text('Email đăng nhập'), findsOneWidget);
