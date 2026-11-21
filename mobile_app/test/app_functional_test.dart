@@ -68,14 +68,13 @@ void main() {
       await tester.tap(find.text('Studio AI').last);
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Chọn ảnh mặt mộc của khách'), findsOneWidget);
-
-      await tester.tap(find.widgetWithText(ChoiceChip, 'Môi'));
-      await tester.pump();
-      expect(find.textContaining('Môi Collagen Cam Đào'), findsOneWidget);
-
-      await tester.tap(find.widgetWithText(ChoiceChip, 'Chân mày'));
-      await tester.pump();
-      expect(find.textContaining('Mày sợi Hairstroke Nâu Tây'), findsOneWidget);
+      // Per SPEC: no hardcoded default catalog items; shows empty-salon prompt
+      expect(find.textContaining('Môi Collagen Cam Đào'), findsNothing);
+      expect(find.textContaining('Mày sợi Hairstroke Nâu Tây'), findsNothing);
+      expect(
+        find.textContaining('Chưa có dịch vụ trong danh mục tiệm'),
+        findsOneWidget,
+      );
 
       // Verify Logout button on the active tab returns to LoginScreen
       await tester.tap(find.byIcon(Icons.logout).hitTestable().first);
@@ -108,7 +107,10 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('Kết nối với Facebook'), findsOneWidget);
-      expect(find.text('Quản lý Nhân viên & Nhật ký'), findsOneWidget);
+      expect(find.text('Sao chép Prompt Business AI'), findsOneWidget);
+      expect(find.text('Quản lý Danh mục dịch vụ'), findsOneWidget);
+      expect(find.text('Nhật ký hoạt động & Tài khoản'), findsOneWidget);
+      expect(find.text('Nhập mã thiết lập tiệm'), findsOneWidget);
       expect(find.text('Lưu kịch bản & bảng giá'), findsOneWidget);
 
       // Zero-Key UI: never expose backend secrets
@@ -120,10 +122,14 @@ void main() {
     },
   );
 
-  test('4. userMessage maps Luong B and staff management error codes cleanly', () {
+  test('4. userMessage maps Luong B, single-owner, onboarding, and catalog error codes cleanly', () {
     expect(
       userMessage(const ApiException(429, 'AI_DAILY_CAP')),
       contains('50 lượt'),
+    );
+    expect(
+      userMessage(const ApiException(403, 'SINGLE_OWNER_ONLY')),
+      contains('1 tài khoản Chủ tiệm duy nhất'),
     );
     expect(
       userMessage(const ApiException(403, 'NOT_APPROVED')),
@@ -136,6 +142,10 @@ void main() {
     expect(
       userMessage(const ApiException(409, 'LAST_OWNER_PROTECTED')),
       contains('Chủ tiệm cuối cùng'),
+    );
+    expect(
+      userMessage(const ApiException(404, 'INVALID_ONBOARDING_CODE')),
+      contains('Mã thiết lập tiệm'),
     );
     expect(
       userMessage(const ApiException(400, 'CANNOT_MODIFY_SELF')),

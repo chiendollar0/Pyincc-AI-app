@@ -8,31 +8,29 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/errors/image_prepare_exception.dart';
 import '../../core/errors/user_message.dart';
 import '../../core/theme/app_theme.dart';
+import '../../services/catalog_service.dart';
 import '../../services/handoff_service.dart';
 
 class _Item {
   const _Item(this.id, this.name, this.category);
   final String id;
   final String name;
-  final String category; // 'eyebrow' | 'lip'
+  final String category; // 'eyebrow' | 'lip' | 'other'
 }
-
-const _catalog = <_Item>[
-  _Item('1', 'Mày sợi Hairstroke Nâu Tây', 'eyebrow'),
-  _Item('2', 'Mày Shading Ombre', 'eyebrow'),
-  _Item('3', 'Môi Collagen Cam Đào', 'lip'),
-  _Item('4', 'Môi Khử Thâm Hồng Baby', 'lip'),
-];
 
 class TryOnStudioScreen extends StatefulWidget {
   const TryOnStudioScreen({
     super.key,
     required this.handoffService,
+    this.catalogService,
+    this.catalogVersion = 0,
     this.customerName,
     this.onSignOut,
   });
 
   final HandoffService handoffService;
+  final CatalogService? catalogService;
+  final int catalogVersion;
   final String? customerName;
   final VoidCallback? onSignOut;
 
@@ -43,12 +41,50 @@ class TryOnStudioScreen extends StatefulWidget {
 class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   final _picker = ImagePicker();
 
+  List<_Item> _catalog = const <_Item>[];
   File? _image;
   HandoffCase? _caseResult;
   String _filter = 'all';
   String? _selectedId;
   bool _busy = false;
   bool _approved = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCatalog();
+  }
+
+  @override
+  void didUpdateWidget(covariant TryOnStudioScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.catalogVersion != oldWidget.catalogVersion) {
+      _loadCatalog();
+    }
+  }
+
+  Future<void> _loadCatalog() async {
+    final svc = widget.catalogService;
+    if (svc == null) return;
+    try {
+      final live = await svc.fetchItems();
+      if (!mounted) return;
+      final next = live
+          .map((e) => _Item(e.id, e.name, e.category))
+          .toList();
+      setState(() {
+        _catalog = next;
+        if (_selectedId != null && !next.any((e) => e.id == _selectedId)) {
+          _selectedId = null;
+        }
+        if (_filter == 'other' && !next.any((e) => e.category == 'other')) {
+          _filter = 'all';
+        }
+      });
+    } catch (_) {
+      // Giữ trạng thái danh mục hiện tại khi ngoại tuyến hoặc chưa cấu hình
+    }
+  }
 
   List<_Item> get _visible => _filter == 'all'
       ? _catalog
@@ -162,7 +198,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     if (mounted) {
       showAppMessage(
         context,
-        'Đã sao chép gợi ý để nhân viên kiểm tra trước khi tư vấn.',
+        'Đã sao chép gợi ý để chủ tiệm kiểm tra trước khi tư vấn.',
       );
     }
   }
@@ -215,7 +251,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
             _catalogSection(),
             const SizedBox(height: 16),
             const Text(
-              'Kết quả chỉ là gợi ý nội bộ. Nhân viên xác nhận trước khi tư vấn cho khách.',
+              'Kết quả chỉ là gợi ý nội bộ. Chủ tiệm xác nhận trước khi tư vấn cho khách.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: AppColors.textMuted),
             ),
@@ -343,17 +379,28 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   }
 
   Widget _catalogSection() {
+    if (_catalog.isEmpty) {
+      return const _Card(
+        child: Text(
+          'Chưa có dịch vụ trong danh mục tiệm. Thêm dịch vụ tại Cài đặt → Danh mục dịch vụ.',
+          style: TextStyle(color: AppColors.textMuted),
+        ),
+      );
+    }
+    final hasOther = _catalog.any((e) => e.category == 'other');
+    final filters = <(String, String)>[
+      ('all', 'Tất cả'),
+      ('eyebrow', 'Chân mày'),
+      ('lip', 'Môi'),
+      if (hasOther) ('other', 'Khác'),
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Wrap(
           spacing: 8,
           children: [
-            for (final f in const [
-              ('all', 'Tất cả'),
-              ('eyebrow', 'Chân mày'),
-              ('lip', 'Môi'),
-            ])
+            for (final f in filters)
               ChoiceChip(
                 label: Text(f.$2),
                 selected: _filter == f.$1,

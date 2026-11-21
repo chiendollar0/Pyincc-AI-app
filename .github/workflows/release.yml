@@ -17,6 +17,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Scan tracked files for leaked secrets
+        run: |
+          if git grep -nE "(AIza[0-9A-Za-z_-]{35}|EAAG[0-9A-Za-z]{20,}|sbp_[0-9a-f]{32,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)" -- . ':!.github/workflows/*'; then
+            echo "::error::Potential secret detected in tracked files!"
+            exit 1
+          fi
+
       - name: Setup Node.js & verify backend syntax
         uses: actions/setup-node@v4
         with:

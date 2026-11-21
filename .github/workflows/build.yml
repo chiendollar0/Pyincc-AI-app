@@ -19,6 +19,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Scan tracked files for leaked secrets
+        run: |
+          if git grep -nE "(AIza[0-9A-Za-z_-]{35}|EAAG[0-9A-Za-z]{20,}|sbp_[0-9a-f]{32,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)" -- . ':!.github/workflows/*'; then
+            echo "::error::Potential secret detected in tracked files!"
+            exit 1
+          fi
+
       - name: Verify backend syntax & tests
         run: |
           node --check backend_bridge/meta-webhook/index.js
@@ -44,6 +51,7 @@ jobs:
         run: flutter test
 
       - name: Build debug APK
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         working-directory: mobile_app
         env:
           ORG_GRADLE_PROJECT_FB_CLIENT_TOKEN: ${{ secrets.FB_CLIENT_TOKEN }}
@@ -68,6 +76,7 @@ jobs:
             "--dart-define=TRYON_API_URL=$TRYON_API_URL"
 
       - name: Upload APK artifact
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk

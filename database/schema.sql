@@ -23,10 +23,12 @@ create table if not exists public.shifts (
 create table if not exists public.catalog_items (
   id uuid primary key default gen_random_uuid(),
   org_id uuid references public.organizations(id) on delete cascade,
-  category text check (category in ('eyebrow','lip')) not null,
+  category text check (category in ('eyebrow','lip','other')) not null,
   name text not null,
+  description text,
   price numeric,
-  image_url text
+  image_url text,
+  updated_at timestamptz not null default now()
 );
 
 create table if not exists public.conversations (
@@ -148,12 +150,28 @@ create table if not exists public.bookings (
   service_name text,
   technician_id uuid references public.users(id),
   scheduled_at timestamptz not null,
+  service_date date,
+  followup_done boolean not null default false,
+  notes text,
   status text check (status in ('pending','confirmed','done','cancelled')) default 'pending'
 );
 
 create unique index if not exists bookings_active_slot
   on public.bookings (org_id, scheduled_at)
   where status in ('pending', 'confirmed');
+
+create index if not exists idx_bookings_org_service_date
+  on public.bookings (org_id, service_date)
+  where followup_done = false and status <> 'cancelled';
+
+create table if not exists public.onboarding_codes (
+  code text primary key,
+  org_name text not null,
+  org_id uuid references public.organizations(id) on delete set null,
+  claimed_by uuid,
+  claimed_at timestamptz,
+  created_at timestamptz not null default now()
+);
 
 create table if not exists public.data_deletion_requests (
   code text primary key,

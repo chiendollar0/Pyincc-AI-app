@@ -30,22 +30,58 @@ String userMessage(Object error) {
         if (error.message.contains('INVITATION_NOT_ACCEPTED')) {
           return 'Nhân viên chưa đăng nhập nhận lời mời nên chưa thể kích hoạt lại.';
         }
+        if (error.message.contains('CATALOG_NAME_INVALID')) {
+          return 'Tên dịch vụ không hợp lệ (tối đa 160 ký tự).';
+        }
+        if (error.message.contains('CATALOG_CATEGORY_INVALID')) {
+          return 'Nhóm dịch vụ không hợp lệ.';
+        }
+        if (error.message.contains('ONBOARDING_CODE_REQUIRED')) {
+          return 'Vui lòng nhập mã thiết lập tiệm.';
+        }
         return 'Thông tin gửi lên chưa hợp lệ. Vui lòng kiểm tra lại.';
       case 401:
         return 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.';
       case 403:
+        if (error.message.contains('SINGLE_OWNER_ONLY')) {
+          return 'Phiên bản hiện tại chỉ hỗ trợ 1 tài khoản Chủ tiệm duy nhất.';
+        }
         if (error.message.contains('SELF_APPROVAL_NOT_ALLOWED')) {
-          return 'Nhân viên không thể tự duyệt ảnh do mình tạo. Vui lòng nhờ Chủ tiệm hoặc nhân viên khác duyệt.';
+          return 'Tài khoản này không thể tự duyệt mục này.';
         }
         if (error.message.contains('NOT_APPROVED')) {
           return 'Ca tư vấn chưa được duyệt. Vui lòng duyệt nội dung trước khi gửi.';
         }
+        if (error.message.contains('EMAIL_NOT_CONFIRMED')) {
+          return 'Email của bạn chưa được xác thực. Vui lòng xác nhận email trước khi kích hoạt tiệm.';
+        }
+        if (error.message.contains('NO_MEMBERSHIP')) {
+          return 'Tài khoản chưa thuộc tiệm nào. Hãy nhập mã thiết lập tiệm hoặc chờ Chủ tiệm mời.';
+        }
         return 'Tài khoản của bạn chưa có quyền thực hiện thao tác này.';
       case 404:
+        if (error.message.contains('INVALID_ONBOARDING_CODE')) {
+          return 'Mã thiết lập tiệm không đúng. Vui lòng kiểm tra lại.';
+        }
+        if (error.message.contains('CATALOG_ITEM_NOT_FOUND')) {
+          return 'Không tìm thấy dịch vụ trong danh mục.';
+        }
         return 'Không tìm thấy dữ liệu. Có thể đã bị xoá.';
       case 409:
         if (error.message.contains('INVITATION_ALREADY_EXISTS')) {
           return 'Lời mời cho nhân viên này đang chờ xác nhận.';
+        }
+        if (error.message.contains('MEMBER_ALREADY_ACTIVE')) {
+          return 'Thành viên này hiện đã đang hoạt động trong tiệm.';
+        }
+        if (error.message.contains('MEMBER_REVOKED_USE_REACTIVATE')) {
+          return 'Tài khoản này từng bị thu hồi quyền. Hãy dùng nút "Khôi phục quyền" thay vì mời lại.';
+        }
+        if (error.message.contains('ONBOARDING_CODE_ALREADY_USED')) {
+          return 'Mã thiết lập tiệm này đã được sử dụng.';
+        }
+        if (error.message.contains('ALREADY_HAS_ORGANIZATION')) {
+          return 'Tài khoản của bạn đã thuộc một tiệm khác.';
         }
         if (error.message.contains('LAST_OWNER_PROTECTED')) {
           return 'Không thể hạ quyền hoặc thu hồi Chủ tiệm cuối cùng của tiệm.';
@@ -81,6 +117,9 @@ String userMessage(Object error) {
       case 503:
         if (error.message.contains('GEMINI_NOT_CONFIGURED')) {
           return 'Máy chủ chưa cấu hình dịch vụ phân tích AI. Vui lòng liên hệ quản trị viên.';
+        }
+        if (error.message.contains('META_RELEASE_FAILED')) {
+          return 'Chưa thể trả quyền hội thoại về Business AI lúc này. Vui lòng thử lại.';
         }
         return 'Hệ thống tạm thời gián đoạn. Vui lòng thử lại sau ít phút.';
     }

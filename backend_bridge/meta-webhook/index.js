@@ -6,7 +6,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.disable('x-powered-by');
-app.set('trust proxy', 1);
+app.set('trust proxy', Math.max(1, Number(process.env.TRUST_PROXY_HOPS) || 2));
 const port = Number(process.env.PORT) || 3000;
 const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -225,26 +225,29 @@ app.get('/privacy', (_req, res) => res.type('html').send(
   '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Chính sách Quyền riêng tư — PyinccCRM</title></head>' +
   '<body style="font-family:sans-serif;max-width:720px;margin:32px auto;padding:0 16px;line-height:1.6;">' +
   '<h1>Chính sách Quyền riêng tư — PyinccCRM</h1>' +
-  '<p>PyinccCRM là công cụ hỗ trợ nội bộ cho chủ tiệm và nhân viên được cấp quyền quản lý ca tư vấn, lịch hẹn và phản hồi khách hàng. Mọi tin nhắn gửi tới khách đều do chủ tiệm hoặc nhân viên kiểm duyệt và xác nhận thủ công.</p>' +
+  '<p>PyinccCRM là công cụ hỗ trợ nội bộ dành riêng cho chủ tiệm (quản trị viên Fanpage) quản lý ca tư vấn, lịch hẹn và phản hồi khách hàng. Mọi tin nhắn gửi tới khách đều do chủ tiệm kiểm duyệt và xác nhận thủ công.</p>' +
   '<h2>Các bên thứ ba xử lý dữ liệu</h2>' +
   '<ul>' +
-  '<li><strong>Supabase:</strong> lưu trữ cơ sở dữ liệu hội thoại, lịch hẹn, nhật ký phân quyền và tệp ảnh khách hàng trong bucket riêng tư tách biệt theo từng tiệm (RLS), truy cập qua đường dẫn ký có thời hạn (1 giờ).</li>' +
+  '<li><strong>Supabase:</strong> lưu trữ cơ sở dữ liệu hội thoại, lịch hẹn, nhật ký hoạt động và tệp ảnh khách hàng trong bucket riêng tư tách biệt theo từng tiệm (RLS chỉ cho phép chủ tiệm), truy cập qua đường dẫn ký có thời hạn (1 giờ).</li>' +
   '<li><strong>Google Gemini API:</strong> tiếp nhận ảnh khách hàng (đã xóa siêu dữ liệu EXIF/GPS trước khi tải lên) và ghi chú ca tư vấn từ máy chủ PyinccCRM để phân tích dáng mặt và soạn gợi ý nội bộ cho chủ tiệm. Gemini không tự kết nối Facebook và không tự gửi tin nhắn cho khách.</li>' +
-  '<li><strong>Meta Platforms:</strong> tiếp nhận webhook hội thoại được chuyển giao và gửi phản hồi Messenger đã được chủ tiệm/nhân viên duyệt sau khi tiệm chủ động kết nối Fanpage.</li>' +
+  '<li><strong>Meta Platforms:</strong> tiếp nhận webhook hội thoại được chuyển giao và gửi phản hồi Messenger đã được chủ tiệm duyệt sau khi tiệm chủ động kết nối Fanpage.</li>' +
   '</ul>' +
   '<h2>Thời gian lưu trữ &amp; Quyền xóa dữ liệu</h2>' +
-  '<p>Dữ liệu hội thoại, ảnh tư vấn và nhật ký được lưu trong thời gian tiệm sử dụng dịch vụ hoặc cho đến khi chủ tiệm/khách hàng yêu cầu xóa; đường dẫn ảnh tạm tự hết hạn sau 60 phút.</p>' +
-  '<p>Để thu hồi quyền và xóa dữ liệu, xem hướng dẫn tại <a href="/data-deletion">/data-deletion</a>, gỡ ứng dụng PyinccCRM trong cài đặt Facebook Business Integrations (hệ thống tự động xóa Page Token và gỡ liên kết Facebook kèm mã xác nhận), hoặc gửi email về <strong>phanhungkg03@gmail.com</strong> (xử lý trong vòng 48 giờ).</p></body></html>'
+  '<p>Dữ liệu hội thoại, ảnh tư vấn, ca handoff và nhật ký được lưu trong thời gian tiệm sử dụng dịch vụ hoặc cho đến khi chủ tiệm/khách hàng yêu cầu xóa; đường dẫn ảnh tạm tự hết hạn sau 60 phút.</p>' +
+  '<ul>' +
+  '<li><strong>Thu hồi tích hợp Facebook:</strong> Gỡ ứng dụng PyinccCRM trong cài đặt Facebook Business Integrations sẽ tự động xóa Page Token đã mã hóa, ngắt liên kết Fanpage và gỡ liên kết danh tính Facebook khỏi tài khoản (kèm mã xác nhận tại <a href="/data-deletion">/data-deletion</a>). Thao tác này <em>chỉ thu hồi tích hợp Facebook</em> và không tự xóa dữ liệu hội thoại, ảnh tư vấn hay nhật ký đã lưu của tiệm trên Supabase.</li>' +
+  '<li><strong>Xóa toàn bộ dữ liệu đã lưu trên Supabase:</strong> Gửi email yêu cầu xóa dữ liệu hội thoại, ảnh khách hàng, ca tư vấn và nhật ký về <strong>phanhungkg03@gmail.com</strong> (kèm tên tiệm hoặc mã xác nhận nếu có); yêu cầu được xử lý hoàn tất trong vòng 48 giờ.</li>' +
+  '</ul></body></html>'
 ));
 app.get('/terms', (_req, res) => res.type('html').send(
   '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Điều khoản Dịch vụ — PyinccCRM</title></head>' +
   '<body style="font-family:sans-serif;max-width:720px;margin:32px auto;padding:0 16px;line-height:1.6;">' +
   '<h1>Điều khoản Dịch vụ — PyinccCRM</h1>' +
-  '<p>PyinccCRM là công cụ hỗ trợ chủ tiệm và nhân viên được cấp quyền quản lý ca tư vấn thẩm mỹ, lịch hẹn và phản hồi Messenger.</p>' +
+  '<p>PyinccCRM là công cụ hỗ trợ chủ tiệm (quản trị viên Fanpage) quản lý ca tư vấn thẩm mỹ, lịch hẹn và phản hồi Messenger.</p>' +
   '<ul>' +
-  '<li><strong>Kiểm duyệt bắt buộc:</strong> Chủ tiệm và nhân viên chịu trách nhiệm kiểm tra, chỉnh sửa và duyệt mọi nội dung trước khi gửi tới khách hàng.</li>' +
-  '<li><strong>Sự đồng ý của khách hàng:</strong> Chủ tiệm/nhân viên phải xin sự đồng ý của khách trước khi chụp hoặc tải ảnh lên hệ thống phân tích.</li>' +
-  '<li><strong>Phân quyền nhân viên:</strong> Chủ tiệm chịu trách nhiệm mời, phân quyền và thu hồi quyền nhân viên khi thay đổi nhân sự.</li>' +
+  '<li><strong>Chủ tiệm duy nhất duyệt &amp; gửi:</strong> Chủ tiệm chịu trách nhiệm kiểm tra, chỉnh sửa và duyệt mọi nội dung trước khi gửi tới khách hàng.</li>' +
+  '<li><strong>Sự đồng ý của khách hàng:</strong> Chủ tiệm phải xin sự đồng ý của khách trước khi chụp hoặc tải ảnh lên hệ thống phân tích.</li>' +
+  '<li><strong>Bảo mật tài khoản:</strong> Mỗi tiệm vận hành bằng một tài khoản chủ tiệm toàn quyền; chủ tiệm chịu trách nhiệm bảo mật thông tin đăng nhập của mình.</li>' +
   '<li><strong>Giới hạn AI:</strong> Gợi ý từ Google Gemini chỉ mang tính tham khảo nội bộ, không phải chẩn đoán y tế và không thay thế quyết định chuyên môn của kỹ thuật viên.</li>' +
   '</ul>' +
   '<p>Liên hệ hỗ trợ &amp; pháp lý: <strong>phanhungkg03@gmail.com</strong></p></body></html>'
@@ -259,7 +262,7 @@ app.get('/data-deletion', asyncHandler(async (req, res) => {
       .eq('code', safeCode)
       .maybeSingle();
     if (row) {
-      statusBanner = `<p style="padding:12px;background:#e8f5e9;border-radius:8px;color:#1b5e20;"><strong>Mã xác nhận ${row.code}:</strong> Trạng thái <code>${row.status}</code> (ghi nhận lúc ${row.created_at}). Toàn bộ liên kết Fanpage, token đã mã hóa và liên kết Facebook của tài khoản này đã được gỡ bỏ.</p>`;
+      statusBanner = `<p style="padding:12px;background:#e8f5e9;border-radius:8px;color:#1b5e20;"><strong>Mã xác nhận ${row.code}:</strong> Trạng thái <code>${row.status}</code> (ghi nhận lúc ${row.created_at}). Tích hợp Facebook (liên kết Fanpage, Page Token đã mã hóa và liên kết Facebook trên tài khoản) đã được gỡ bỏ. Để xóa toàn bộ dữ liệu hội thoại/ảnh đã lưu trên Supabase, vui lòng gửi email về <strong>phanhungkg03@gmail.com</strong> kèm mã này.</p>`;
     } else {
       statusBanner = `<p style="padding:12px;background:#fff3e0;border-radius:8px;color:#e65100;"><strong>Mã xác nhận ${safeCode}:</strong> Không tìm thấy yêu cầu tương ứng trong hệ thống.</p>`;
     }
@@ -269,9 +272,9 @@ app.get('/data-deletion', asyncHandler(async (req, res) => {
     '<body style="font-family:sans-serif;max-width:720px;margin:32px auto;padding:0 16px;line-height:1.6;">' +
     '<h1>Hướng dẫn Xóa Dữ liệu Người dùng — PyinccCRM</h1>' +
     statusBanner +
-    '<p>Để thu hồi quyền và xóa toàn bộ dữ liệu liên kết Fanpage:</p>' +
-    '<ol><li>Vào Cài đặt Facebook → Tiện ích tích hợp cho doanh nghiệp (Business Integrations) → chọn <strong>PyinccCRM</strong> → bấm <strong>Gỡ</strong>. Hệ thống sẽ tự động nhận tín hiệu thu hồi và xóa toàn bộ Page Token, liên kết Fanpage và gỡ liên kết Facebook khỏi tài khoản thành viên.</li>' +
-    '<li>Hoặc gửi email yêu cầu xóa toàn bộ dữ liệu hội thoại về <strong>phanhungkg03@gmail.com</strong>, yêu cầu sẽ được xử lý trong vòng 48 giờ.</li></ol></body></html>'
+    '<p>Bạn có thể thực hiện hai mức thu hồi và xóa dữ liệu như sau:</p>' +
+    '<ol><li><strong>Thu hồi tích hợp Facebook:</strong> Vào Cài đặt Facebook → Tiện ích tích hợp cho doanh nghiệp (Business Integrations) → chọn <strong>PyinccCRM</strong> → bấm <strong>Gỡ</strong>. Hệ thống tự động xóa Page Token đã mã hóa, ngắt liên kết Fanpage và gỡ liên kết danh tính Facebook khỏi tài khoản. Lưu ý: thao tác này không tự xóa dữ liệu hội thoại, ảnh tư vấn và nhật ký đã lưu trong Supabase.</li>' +
+    '<li><strong>Xóa toàn bộ dữ liệu đã lưu trên Supabase:</strong> Gửi email yêu cầu xóa toàn bộ dữ liệu hội thoại, ảnh khách hàng, ca tư vấn và nhật ký về <strong>phanhungkg03@gmail.com</strong>; yêu cầu sẽ được xử lý hoàn tất trong vòng 48 giờ.</li></ol></body></html>'
   );
 }));
 app.get('/internal/status', requireInternalApiKey, (_req, res) =>
@@ -280,7 +283,7 @@ app.get('/internal/webhook-status', requireInternalApiKey, (_req, res) =>
   res.json({ ...webhookDiagnostics }));
 
 // Returns 501 Not Implemented until an image generation model is configured (Section 1 & Section 12)
-app.post('/api/tryon/generate', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
+app.post('/api/tryon/generate', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
   const imageBase64 = String(req.body?.image_base64 || req.body?.imageBase64 || '').trim();
   if (!imageBase64) return res.status(400).json({ error: 'image_base64 is required' });
   return res.status(501).json({
@@ -331,7 +334,7 @@ async function countActiveOwners(orgId) {
   return count || 0;
 }
 
-app.get('/me', requireAuth, requireRole('owner', 'staff'), (req, res) => res.json({
+app.get('/me', requireAuth, requireRole('owner'), (req, res) => res.json({
   userId: req.authUser.id,
   email: req.authUser.email || null,
   orgId: req.orgId,
@@ -346,56 +349,16 @@ app.get('/memberships', requireAuth, requireRole('owner'), asyncHandler(async (r
   return res.json({ memberships: data || [], currentUserId: req.authUser.id });
 }));
 
-app.post('/memberships/invite', authWriteLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
-  const invitedEmail = typeof req.body?.email === 'string' && req.body.email.trim()
-    ? req.body.email.trim().toLowerCase()
-    : null;
-  const invitedFbUserId = typeof req.body?.fbUserId === 'string' && req.body.fbUserId.trim()
-    ? req.body.fbUserId.trim()
-    : null;
-  const requestedRole = req.body?.role === 'owner' ? 'owner' : 'staff';
-  if (!invitedEmail && !invitedFbUserId) return res.status(400).json({ error: 'email or fbUserId is required to invite staff' });
-
-  if (invitedEmail) {
-    const { data: dupEmail } = await supabase.from('memberships')
-      .select('id')
-      .eq('org_id', req.orgId)
-      .eq('invited_email', invitedEmail)
-      .eq('status', 'pending')
-      .maybeSingle();
-    if (dupEmail) return res.status(409).json({ error: 'INVITATION_ALREADY_EXISTS' });
-  }
-  if (invitedFbUserId) {
-    const { data: dupFb } = await supabase.from('memberships')
-      .select('id')
-      .eq('org_id', req.orgId)
-      .eq('invited_fb_user_id', invitedFbUserId)
-      .eq('status', 'pending')
-      .maybeSingle();
-    if (dupFb) return res.status(409).json({ error: 'INVITATION_ALREADY_EXISTS' });
-  }
-
-  const { data, error } = await supabase.from('memberships').insert({
-    org_id: req.orgId, invited_email: invitedEmail, invited_fb_user_id: invitedFbUserId,
-    role: requestedRole, status: 'pending',
-  }).select('id, org_id, invited_email, invited_fb_user_id, role, status, created_at').single();
-  if (error) {
-    if (error.code === '23505') {
-      return res.status(409).json({ error: 'INVITATION_ALREADY_EXISTS' });
-    }
-    return res.status(500).json({ error: 'Failed to create staff invitation' });
-  }
-  await recordAuditLog({
-    orgId: req.orgId,
-    actorUserId: req.authUser.id,
-    actorRole: req.userRole,
-    action: 'membership.invite',
-    targetType: 'membership',
-    targetId: data.id,
-    metadata: { invited_email: invitedEmail, role: requestedRole },
+app.post('/memberships/invite', authWriteLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (_req, res) => {
+  return res.status(403).json({
+    error: 'SINGLE_OWNER_ONLY',
+    message: 'Phiên bản hiện tại chỉ hỗ trợ 1 tài khoản Chủ tiệm duy nhất.',
   });
-  return res.json({ success: true, invitation: data });
 }));
+
+function isLastOwnerDbError(err) {
+  return Boolean(err && (err.code === 'P0001' || String(err.message || '').includes('LAST_OWNER_PROTECTED')));
+}
 
 app.patch('/memberships/:id', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const nextRole = req.body?.role !== undefined ? String(req.body.role).trim() : undefined;
@@ -409,6 +372,12 @@ app.patch('/memberships/:id', writeLimiter, requireAuth, requireRole('owner'), e
   if (nextRole === undefined && nextStatus === undefined) {
     return res.status(400).json({ error: 'NO_CHANGES' });
   }
+  if (nextRole !== undefined || nextStatus === 'active') {
+    return res.status(403).json({
+      error: 'SINGLE_OWNER_ONLY',
+      message: 'Phiên bản hiện tại chỉ hỗ trợ 1 tài khoản Chủ tiệm duy nhất.',
+    });
+  }
 
   const { data: target, error: findErr } = await supabase.from('memberships')
     .select('id, org_id, user_id, invited_email, role, status')
@@ -420,12 +389,8 @@ app.patch('/memberships/:id', writeLimiter, requireAuth, requireRole('owner'), e
   if (target.user_id && String(target.user_id) === String(req.authUser.id)) {
     return res.status(400).json({ error: 'CANNOT_MODIFY_SELF' });
   }
-  if (nextStatus === 'active' && !target.user_id) {
-    return res.status(400).json({ error: 'INVITATION_NOT_ACCEPTED' });
-  }
 
-  const demotingActiveOwner = target.role === 'owner' && target.status === 'active' &&
-    ((nextRole !== undefined && nextRole !== 'owner') || nextStatus === 'revoked');
+  const demotingActiveOwner = target.role === 'owner' && target.status === 'active' && nextStatus === 'revoked';
   if (demotingActiveOwner) {
     const activeOwners = await countActiveOwners(req.orgId);
     if (activeOwners <= 1) {
@@ -443,6 +408,7 @@ app.patch('/memberships/:id', writeLimiter, requireAuth, requireRole('owner'), e
     .eq('org_id', req.orgId)
     .select('id, org_id, user_id, invited_email, invited_fb_user_id, role, status, created_at, updated_at')
     .single();
+  if (isLastOwnerDbError(updateErr)) return res.status(409).json({ error: 'LAST_OWNER_PROTECTED' });
   if (updateErr || !updated) return res.status(500).json({ error: 'Failed to update membership' });
 
   if (nextRole !== undefined && nextRole !== target.role) {
@@ -505,6 +471,7 @@ app.post('/memberships/:id/revoke', writeLimiter, requireAuth, requireRole('owne
     .eq('org_id', req.orgId)
     .select('id, org_id, user_id, invited_email, invited_fb_user_id, role, status, created_at, updated_at')
     .single();
+  if (isLastOwnerDbError(updateErr)) return res.status(409).json({ error: 'LAST_OWNER_PROTECTED' });
   if (updateErr || !updated) return res.status(500).json({ error: 'Failed to revoke membership' });
 
   await recordAuditLog({
@@ -618,7 +585,7 @@ app.get('/auth/facebook/callback', (_req, res) => {
   });
 });
 
-app.get('/connected-pages', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+app.get('/connected-pages', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from('connected_pages').select('page_id, page_name, updated_at')
     .eq('org_id', req.orgId).order('updated_at', { ascending: false });
   if (error) return res.status(500).json({ error: 'Failed to load connected pages' });
@@ -720,7 +687,7 @@ async function resolvePageCredentialsForOrg(orgId, requiredPageId) {
   return null;
 }
 
-app.get('/settings', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+app.get('/settings', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from('salon_settings').select('on_duty, consultation_script, updated_at')
     .eq('org_id', req.orgId).maybeSingle();
   if (error) return res.status(500).json({ error: 'Failed to load settings' });
@@ -728,7 +695,7 @@ app.get('/settings', requireAuth, requireRole('owner', 'staff'), asyncHandler(as
     consultationScript: data ? String(data.consultation_script || '') : '' });
 }));
 
-app.put('/settings', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '32kb' }), asyncHandler(async (req, res) => {
+app.put('/settings', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '32kb' }), asyncHandler(async (req, res) => {
   if (typeof req.body?.consultationScript === 'string' && req.userRole !== 'owner') return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   const onDuty = typeof req.body?.onDuty === 'boolean' ? req.body.onDuty : true;
   const payload = { key: `org:${req.orgId}`, org_id: req.orgId, on_duty: onDuty, updated_at: new Date().toISOString() };
@@ -758,12 +725,14 @@ app.post('/onboarding/claim', authWriteLimiter, requireSupabaseUser, express.jso
   if (codeRow.claimed_by) return res.status(409).json({ error: 'ONBOARDING_CODE_ALREADY_USED' });
 
   let orgId = codeRow.org_id;
+  let createdNewOrg = false;
   if (!orgId) {
     const { data: newOrg, error: orgErr } = await supabase.from('organizations')
       .insert({ name: String(codeRow.org_name || 'PYINCC Salon').trim() })
       .select('id').single();
     if (orgErr || !newOrg?.id) return res.status(500).json({ error: 'ORG_CREATE_FAILED' });
     orgId = newOrg.id;
+    createdNewOrg = true;
   }
 
   const { data: claimed } = await supabase.from('onboarding_codes')
@@ -772,7 +741,12 @@ app.post('/onboarding/claim', authWriteLimiter, requireSupabaseUser, express.jso
     .is('claimed_by', null)
     .select('code, org_id, org_name')
     .maybeSingle();
-  if (!claimed) return res.status(409).json({ error: 'ONBOARDING_CODE_ALREADY_USED' });
+  if (!claimed) {
+    if (createdNewOrg) {
+      try { await supabase.from('organizations').delete().eq('id', orgId); } catch (_) { /* best-effort cleanup */ }
+    }
+    return res.status(409).json({ error: 'ONBOARDING_CODE_ALREADY_USED' });
+  }
 
   const { data: membership, error: memErr } = await supabase.from('memberships')
     .insert({
@@ -798,7 +772,7 @@ app.post('/onboarding/claim', authWriteLimiter, requireSupabaseUser, express.jso
   return res.json({ success: true, org_id: orgId, org_name: claimed.org_name, role: 'owner' });
 }));
 
-app.get('/catalog', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+app.get('/catalog', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from('catalog_items')
     .select('id, category, name, description, image_url, updated_at')
     .eq('org_id', req.orgId)
@@ -826,6 +800,15 @@ app.post('/catalog', writeLimiter, requireAuth, requireRole('owner'), express.js
     .select('id, category, name, description, image_url, updated_at')
     .single();
   if (error || !data) return res.status(500).json({ error: 'Failed to create catalog item' });
+  await recordAuditLog({
+    orgId: req.orgId,
+    actorUserId: req.authUser.id,
+    actorRole: req.userRole,
+    action: 'catalog.create',
+    targetType: 'catalog_item',
+    targetId: data.id,
+    metadata: { name, category },
+  });
   return res.status(201).json({ success: true, item: data });
 }));
 
@@ -843,6 +826,15 @@ app.put('/catalog/:id', writeLimiter, requireAuth, requireRole('owner'), express
     .select('id, category, name, description, image_url, updated_at')
     .maybeSingle();
   if (error || !data) return res.status(404).json({ error: 'CATALOG_ITEM_NOT_FOUND' });
+  await recordAuditLog({
+    orgId: req.orgId,
+    actorUserId: req.authUser.id,
+    actorRole: req.userRole,
+    action: 'catalog.update',
+    targetType: 'catalog_item',
+    targetId: data.id,
+    metadata: { name, category },
+  });
   return res.json({ success: true, item: data });
 }));
 
@@ -854,10 +846,18 @@ app.delete('/catalog/:id', writeLimiter, requireAuth, requireRole('owner'), asyn
     .select('id')
     .maybeSingle();
   if (error || !data) return res.status(404).json({ error: 'CATALOG_ITEM_NOT_FOUND' });
+  await recordAuditLog({
+    orgId: req.orgId,
+    actorUserId: req.authUser.id,
+    actorRole: req.userRole,
+    action: 'catalog.delete',
+    targetType: 'catalog_item',
+    targetId: data.id,
+  });
   return res.json({ success: true, id: data.id });
 }));
 
-app.get('/bookings', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+app.get('/bookings', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from('bookings').select('*').eq('org_id', req.orgId)
     .order('scheduled_at', { ascending: true }).limit(50);
   if (error) return res.status(500).json({ error: 'Failed to fetch bookings' });
@@ -882,7 +882,7 @@ function parseVietnamScheduledAt(timeSlot) {
   return new Date().toISOString();
 }
 
-app.post('/bookings', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+app.post('/bookings', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const customerName = String(req.body?.customerName || req.body?.customer_name || '').trim();
   const customerPhone = String(req.body?.customerPhone || req.body?.customer_phone || '').trim();
   const serviceName = String(req.body?.serviceName || req.body?.service_name || '').trim();
@@ -927,23 +927,40 @@ function vnDateString(dateObj = new Date()) {
   return `${y}-${m}-${d}`;
 }
 
-app.get('/bookings/reminders', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
-  const { data, error } = await supabase.from('bookings')
-    .select('id, customer_name, customer_phone, service_name, scheduled_at, service_date, followup_done, notes, status')
-    .eq('org_id', req.orgId)
-    .neq('status', 'cancelled')
-    .order('scheduled_at', { ascending: true })
-    .limit(200);
-  if (error) return res.status(500).json({ error: 'Failed to load booking reminders' });
-
+app.get('/bookings/reminders', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const todayStr = vnDateString(new Date());
   const sevenDaysAgoStr = vnDateString(new Date(Date.now() - 7 * 24 * 3600 * 1000));
-  const rows = Array.isArray(data) ? data : [];
-  const today = rows.filter((b) => {
+  const todayStartUtc = new Date(`${todayStr}T00:00:00+07:00`).toISOString();
+  const todayEndUtc = new Date(`${todayStr}T23:59:59.999+07:00`).toISOString();
+  const cutoffEndUtc = new Date(`${sevenDaysAgoStr}T23:59:59.999+07:00`).toISOString();
+  const selectCols = 'id, customer_name, customer_phone, service_name, scheduled_at, service_date, followup_done, notes, status';
+
+  const [todayRes, followupRes] = await Promise.all([
+    supabase.from('bookings')
+      .select(selectCols)
+      .eq('org_id', req.orgId)
+      .neq('status', 'cancelled')
+      .or(`service_date.eq.${todayStr},and(service_date.is.null,scheduled_at.gte.${todayStartUtc},scheduled_at.lte.${todayEndUtc})`)
+      .order('scheduled_at', { ascending: true })
+      .limit(500),
+    supabase.from('bookings')
+      .select(selectCols)
+      .eq('org_id', req.orgId)
+      .neq('status', 'cancelled')
+      .eq('followup_done', false)
+      .or(`service_date.lte.${sevenDaysAgoStr},and(service_date.is.null,scheduled_at.lte.${cutoffEndUtc})`)
+      .order('scheduled_at', { ascending: true })
+      .limit(500),
+  ]);
+  if (todayRes.error || followupRes.error) {
+    return res.status(500).json({ error: 'Failed to load booking reminders' });
+  }
+
+  const today = (Array.isArray(todayRes.data) ? todayRes.data : []).filter((b) => {
     const day = b.service_date || (b.scheduled_at ? vnDateString(new Date(b.scheduled_at)) : null);
     return day === todayStr;
   });
-  const dueFollowups = rows.filter((b) => {
+  const dueFollowups = (Array.isArray(followupRes.data) ? followupRes.data : []).filter((b) => {
     if (b.followup_done) return false;
     const day = b.service_date || (b.scheduled_at ? vnDateString(new Date(b.scheduled_at)) : null);
     return Boolean(day && day <= sevenDaysAgoStr);
@@ -956,7 +973,7 @@ app.get('/bookings/reminders', requireAuth, requireRole('owner', 'staff'), async
   });
 }));
 
-app.patch('/bookings/:id/followup', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '4kb' }), asyncHandler(async (req, res) => {
+app.patch('/bookings/:id/followup', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '4kb' }), asyncHandler(async (req, res) => {
   const done = typeof req.body?.done === 'boolean' ? req.body.done : true;
   const { data, error } = await supabase.from('bookings')
     .update({ followup_done: done })
@@ -968,7 +985,7 @@ app.patch('/bookings/:id/followup', writeLimiter, requireAuth, requireRole('owne
   return res.json({ success: true, booking: data });
 }));
 
-app.post('/messages/:id/approve', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+app.post('/messages/:id/approve', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const messageRowId = String(req.params.id || '').trim();
   const draftReply = String(req.body?.text || req.body?.draftReply || '').trim();
   if (!messageRowId || !draftReply) return res.status(400).json({ error: 'message id and text are required' });
@@ -999,7 +1016,7 @@ function mapMetaSendError(error) {
   return { status: 502, body: { error: 'META_SEND_FAILED' } };
 }
 
-app.post('/send-message', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+app.post('/send-message', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const messageRecordId = String(req.body?.messageRecordId || req.body?.message_record_id || '').trim();
   const requestedPageId = String(req.body?.pageId || req.body?.page_id || '').trim();
   if (!messageRecordId) return res.status(400).json({ error: 'messageRecordId is required; approve the message first' });
@@ -1055,7 +1072,7 @@ app.post('/send-message', writeLimiter, requireAuth, requireRole('owner', 'staff
   }
 }));
 
-app.post('/tryon-drafts', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
+app.post('/tryon-drafts', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
   const recipientId = String(req.body?.recipientId || req.body?.recipient_id || '').trim();
   const pageId = String(req.body?.pageId || req.body?.page_id || '').trim();
   const imageBase64 = String(req.body?.imageBase64 || req.body?.image_base64 || '').trim();
@@ -1079,7 +1096,7 @@ app.post('/tryon-drafts', writeLimiter, requireAuth, requireRole('owner', 'staff
   return res.json({ success: true, media });
 }));
 
-app.post('/tryon-drafts/:id/approve', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+app.post('/tryon-drafts/:id/approve', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const mediaRecordId = String(req.params.id || '').trim();
   if (!mediaRecordId) return res.status(400).json({ error: 'media id is required' });
 
@@ -1122,7 +1139,7 @@ app.post('/tryon-drafts/:id/approve', writeLimiter, requireAuth, requireRole('ow
   return res.json({ success: true, media });
 }));
 
-app.post('/send-tryon-image', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+app.post('/send-tryon-image', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
   const mediaRecordId = String(req.body?.mediaRecordId || req.body?.media_record_id || '').trim();
   if (!mediaRecordId) return res.status(400).json({ error: 'mediaRecordId is required' });
   const { data: media, error } = await supabase.from('customer_media')
@@ -1230,7 +1247,7 @@ function detectImageMime(buf) {
 
 async function loadCatalog(orgId) {
   const { data } = await supabase.from('catalog_items')
-    .select('id, name, category, price')
+    .select('id, name, category, description')
     .eq('org_id', orgId);
   return Array.isArray(data) ? data : [];
 }
@@ -1288,7 +1305,7 @@ async function analyzeCase({ orgId, text, imageBase64, mime, catalog, excludeCas
   return out;
 }
 
-app.get('/handoff-cases', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+app.get('/handoff-cases', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
   const rawStatus = String(req.query.status || '').trim();
   const allowedStatuses = new Set(['new', 'analyzing', 'pending_review', 'approved', 'sending', 'sent', 'rejected', 'failed']);
@@ -1321,7 +1338,7 @@ app.get('/handoff-cases', requireAuth, requireRole('owner', 'staff'), asyncHandl
   return res.json({ cases });
 }));
 
-app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner', 'staff'),
+app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner'),
   express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
     const imageBase64 = String(req.body?.image_base64 || '').trim();
     const customerText = typeof req.body?.customer_text === 'string' && req.body.customer_text.trim()
@@ -1385,14 +1402,33 @@ app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner
     }
   }));
 
-app.post('/handoff-cases/:id/analyze', writeLimiter, requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+app.post('/handoff-cases/:id/analyze', writeLimiter, requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data: row } = await supabase.from('handoff_cases').select('*')
     .eq('id', req.params.id).eq('org_id', req.orgId).maybeSingle();
   if (!row) return res.status(404).json({ error: 'NOT_FOUND' });
   if (row.status !== 'new' && row.status !== 'failed') {
     return res.status(409).json({ error: 'ALREADY_ANALYZED' });
   }
-  await supabase.from('handoff_cases').update({ status: 'analyzing' }).eq('id', row.id).eq('org_id', req.orgId);
+  const geminiKey = String(process.env.GEMINI_API_KEY || '').trim();
+  if (!geminiKey) return res.status(503).json({ error: 'GEMINI_NOT_CONFIGURED' });
+  const currentDailyCount = await dailyAiCount(req.orgId, row.id);
+  if (currentDailyCount >= HANDOFF_DAILY_AI_CAP) {
+    return res.status(429).json({ error: 'AI_DAILY_CAP' });
+  }
+  const { data: claimed, error: claimErr } = await supabase.from('handoff_cases')
+    .update({ status: 'analyzing' })
+    .eq('id', row.id)
+    .eq('org_id', req.orgId)
+    .in('status', ['new', 'failed'])
+    .select('id')
+    .maybeSingle();
+  if (claimErr) {
+    console.error(JSON.stringify({ event: 'analyze_case_claim_failed', caseId: row.id, message: claimErr.message }));
+    return res.status(500).json({ error: 'CLAIM_FAILED' });
+  }
+  if (!claimed) {
+    return res.status(409).json({ error: 'ALREADY_ANALYZED' });
+  }
   try {
     let imageBase64 = null;
     let mime = null;
@@ -1426,7 +1462,7 @@ app.post('/handoff-cases/:id/analyze', writeLimiter, requireAuth, requireRole('o
   }
 }));
 
-app.post('/handoff-cases/:id/approve', writeLimiter, requireAuth, requireRole('owner', 'staff'),
+app.post('/handoff-cases/:id/approve', writeLimiter, requireAuth, requireRole('owner'),
   express.json({ limit: '8kb' }), asyncHandler(async (req, res) => {
     const text = String(req.body?.draft_reply || '').trim();
     if (!text || text.length > 2000) return res.status(400).json({ error: 'TEXT_INVALID' });
@@ -1453,11 +1489,11 @@ app.post('/handoff-cases/:id/approve', writeLimiter, requireAuth, requireRole('o
     return res.json({ success: true, id: data.id, status: data.status });
   }));
 
-app.post('/handoff-cases/:id/reject', writeLimiter, requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+app.post('/handoff-cases/:id/reject', writeLimiter, requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from('handoff_cases').update({ status: 'rejected' })
     .eq('id', req.params.id)
     .eq('org_id', req.orgId)
-    .in('status', ['new', 'pending_review', 'approved'])
+    .in('status', ['new', 'pending_review', 'approved', 'failed'])
     .select('id, status')
     .maybeSingle();
   if (error || !data) return res.status(404).json({ error: 'NOT_REJECTABLE' });
@@ -1472,7 +1508,7 @@ app.post('/handoff-cases/:id/reject', writeLimiter, requireAuth, requireRole('ow
   return res.json({ success: true, id: data.id, status: data.status });
 }));
 
-app.post('/handoff-cases/:id/send', writeLimiter, requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+app.post('/handoff-cases/:id/send', writeLimiter, requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data: c } = await supabase.from('handoff_cases').select('*')
     .eq('id', req.params.id).eq('org_id', req.orgId).maybeSingle();
   if (!c) return res.status(404).json({ error: 'NOT_FOUND' });
@@ -1508,13 +1544,14 @@ app.post('/handoff-cases/:id/send', writeLimiter, requireAuth, requireRole('owne
   }
 }));
 
-app.post('/handoff-cases/:id/release', writeLimiter, requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+app.post('/handoff-cases/:id/release', writeLimiter, requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data: c } = await supabase.from('handoff_cases')
-    .select('id, org_id, page_id, psid')
+    .select('id, org_id, page_id, psid, status')
     .eq('id', req.params.id)
     .eq('org_id', req.orgId)
     .maybeSingle();
   if (!c) return res.status(404).json({ error: 'NOT_FOUND' });
+  if (c.status === 'sending') return res.status(409).json({ error: 'ALREADY_SENDING' });
   if (!c.psid || !c.page_id) return res.status(422).json({ error: 'NO_RECIPIENT' });
 
   const page = await resolvePageCredentialsForOrg(req.orgId, c.page_id);
@@ -1535,6 +1572,14 @@ app.post('/handoff-cases/:id/release', writeLimiter, requireAuth, requireRole('o
     .eq('page_id', c.page_id)
     .eq('psid', c.psid);
 
+  // Close open cases on this thread so no stale send/release action can race with Business AI
+  await supabase.from('handoff_cases')
+    .update({ status: 'rejected' })
+    .eq('org_id', req.orgId)
+    .eq('page_id', c.page_id)
+    .eq('psid', c.psid)
+    .in('status', ['new', 'pending_review', 'approved', 'failed']);
+
   await recordAuditLog({
     orgId: req.orgId,
     actorUserId: req.authUser.id,
@@ -1544,7 +1589,7 @@ app.post('/handoff-cases/:id/release', writeLimiter, requireAuth, requireRole('o
     targetId: c.id,
     metadata: { page_id: page.pageId },
   });
-  return res.json({ success: true, released: true });
+  return res.json({ success: true, released: true, status: c.status === 'sent' ? 'sent' : 'rejected' });
 }));
 
 app.get('/webhook', (req, res) => {
@@ -1557,7 +1602,7 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-app.get('/messages', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+app.get('/messages', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
   const { data, error } = await supabase.from('conversation_messages').select('*').eq('org_id', req.orgId)
     .order('created_at', { ascending: false }).limit(limit);
