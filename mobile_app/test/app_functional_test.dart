@@ -111,7 +111,15 @@ void main() {
       expect(find.text('Quản lý Danh mục dịch vụ'), findsOneWidget);
       expect(find.text('Nhật ký hoạt động & Tài khoản'), findsOneWidget);
       expect(find.text('Nhập mã thiết lập tiệm'), findsOneWidget);
-      expect(find.text('Lưu kịch bản & bảng giá'), findsOneWidget);
+      expect(find.text('Lưu ghi chú tư vấn'), findsOneWidget);
+
+      // Verify opening & closing TextField dialog does not trigger _dependents.isEmpty
+      await tester.tap(find.text('Nhập mã thiết lập tiệm'));
+      await tester.pumpAndSettle();
+      expect(find.text('Mã thiết lập tiệm'), findsOneWidget);
+      await tester.tap(find.text('Hủy'));
+      await tester.pumpAndSettle();
+      expect(find.text('Mã thiết lập tiệm'), findsNothing);
 
       // Zero-Key UI: never expose backend secrets
       expect(find.textContaining('API Key'), findsNothing);

@@ -1366,7 +1366,10 @@ app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner
     const ext = mime === 'image/png' ? 'png' : (mime === 'image/webp' ? 'webp' : 'jpg');
     const storagePath = `owner/${req.orgId}/${crypto.randomUUID()}.${ext}`;
     const { error: upErr } = await uploadWithRetry(storagePath, buf, mime);
-    if (upErr) return res.status(502).json({ error: 'UPLOAD_FAILED' });
+    if (upErr) {
+      console.error(JSON.stringify({ event: 'handoff_capture_upload_failed', message: upErr.message || String(upErr) }));
+      return res.status(502).json({ error: 'UPLOAD_FAILED' });
+    }
     const catalog = await loadCatalog(req.orgId);
     const { data: row, error: insertErr } = await supabase.from('handoff_cases').insert({
       org_id: req.orgId,
@@ -1378,7 +1381,10 @@ app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner
       created_by: req.authUser.id,
       status: 'analyzing',
     }).select('id').single();
-    if (insertErr || !row) return res.status(500).json({ error: 'CASE_CREATE_FAILED' });
+    if (insertErr || !row) {
+      console.error(JSON.stringify({ event: 'handoff_capture_insert_failed', message: insertErr?.message || 'no_row' }));
+      return res.status(500).json({ error: 'CASE_CREATE_FAILED' });
+    }
 
     try {
       const analysis = await analyzeCase({
@@ -1396,9 +1402,15 @@ app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner
       }).eq('id', row.id).eq('org_id', req.orgId);
       return res.json({ id: row.id, status: 'pending_review', analysis });
     } catch (err) {
+      console.error(JSON.stringify({
+        event: 'handoff_capture_ai_failed',
+        code: err.code || 'AI_FAILED',
+        httpStatus: err.response?.status || null,
+        message: err.message,
+      }));
       await supabase.from('handoff_cases').update({ status: 'failed' }).eq('id', row.id).eq('org_id', req.orgId);
       const status = err.code === 'AI_DAILY_CAP' ? 429 : (err.code === 'GEMINI_NOT_CONFIGURED' ? 503 : 502);
-      return res.status(status).json({ error: err.code || 'AI_FAILED' });
+      return res.status(status).json({ error: err.code || 'AI_FAILED', case_id: row.id });
     }
   }));
 
@@ -1456,6 +1468,13 @@ app.post('/handoff-cases/:id/analyze', writeLimiter, requireAuth, requireRole('o
     }).eq('id', row.id).eq('org_id', req.orgId);
     return res.json({ id: row.id, status: 'pending_review', analysis });
   } catch (err) {
+    console.error(JSON.stringify({
+      event: 'handoff_analyze_ai_failed',
+      caseId: row.id,
+      code: err.code || 'AI_FAILED',
+      httpStatus: err.response?.status || null,
+      message: err.message,
+    }));
     await supabase.from('handoff_cases').update({ status: 'failed' }).eq('id', row.id).eq('org_id', req.orgId);
     const status = err.code === 'AI_DAILY_CAP' ? 429 : (err.code === 'GEMINI_NOT_CONFIGURED' ? 503 : 502);
     return res.status(status).json({ error: err.code || 'AI_FAILED' });

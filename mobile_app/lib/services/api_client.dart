@@ -129,15 +129,22 @@ class ApiClient {
   Map<String, dynamic> _decodeObjectResponse(http.Response response) {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       String serverCode = 'Yêu cầu chưa thành công.';
+      String? serverCaseId;
       try {
         final parsed = jsonDecode(response.body);
-        if (parsed is Map<String, dynamic> && parsed['error'] is String) {
-          serverCode = (parsed['error'] as String).trim();
+        if (parsed is Map<String, dynamic>) {
+          if (parsed['error'] is String) {
+            serverCode = (parsed['error'] as String).trim();
+          }
+          if (parsed['case_id'] is String &&
+              (parsed['case_id'] as String).trim().isNotEmpty) {
+            serverCaseId = (parsed['case_id'] as String).trim();
+          }
         }
       } catch (_) {
         // Giữ thông báo mặc định nếu phản hồi không phải JSON
       }
-      throw ApiException(response.statusCode, serverCode);
+      throw ApiException(response.statusCode, serverCode, caseId: serverCaseId);
     }
     final decoded = jsonDecode(response.body);
     if (decoded is! Map<String, dynamic>) {

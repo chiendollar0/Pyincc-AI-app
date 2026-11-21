@@ -152,12 +152,18 @@ class HandoffService {
     );
   }
 
-  Future<void> analyzeCase(String id) async {
+  Future<HandoffCase> analyzeCase(String id) async {
     final cleanId = Uri.encodeComponent(id.trim());
-    await api.post(
+    final body = await api.post(
       '/handoff-cases/$cleanId/analyze',
       const {},
       timeout: const Duration(seconds: 40),
     );
+    return HandoffCase.fromJson({
+      'id': body['id'] ?? id.trim(),
+      'source': 'owner_capture',
+      'status': body['status'] ?? 'pending_review',
+      'analysis': body['analysis'],
+    });
   }
 }

@@ -495,45 +495,11 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
   }
 
   Future<void> _showOnboardingClaimDialog() async {
-    final codeCtrl = TextEditingController();
-    final submitted = await showDialog<bool>(
+    final code = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Nhập mã thiết lập tiệm'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Nhập mã thiết lập 1 lần để tạo tiệm và kích hoạt quyền Chủ tiệm cho tài khoản này.',
-              style: TextStyle(fontSize: 13, color: AppColors.textMuted),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: codeCtrl,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                labelText: 'Mã thiết lập tiệm',
-                prefixIcon: Icon(Icons.key_outlined),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Hủy'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Kích hoạt'),
-          ),
-        ],
-      ),
+      builder: (_) => const _OnboardingCodeDialog(),
     );
-    final code = codeCtrl.text.trim();
-    codeCtrl.dispose();
-    if (submitted != true || code.isEmpty) return;
+    if (code == null || code.isEmpty) return;
 
     try {
       final orgName = await widget.inboxService.claimOnboardingCode(code);
@@ -566,7 +532,7 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
         consultationScript: _scriptController.text,
       );
       if (!mounted) return;
-      showAppMessage(context, 'Đã lưu kịch bản & bảng giá lên máy chủ.');
+      showAppMessage(context, 'Đã lưu ghi chú tư vấn lên máy chủ.');
     } catch (error) {
       if (!mounted) return;
       showAppMessage(context, userMessage(error), isError: true);
@@ -603,61 +569,18 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
   }
 
   Future<void> _addQuickBookingDialog() async {
-    final nameCtrl = TextEditingController();
-    final timeCtrl = TextEditingController(text: '17:30');
-    final serviceCtrl =
-        TextEditingController(text: 'Môi Collagen Cam Đào');
-
-    final created = await showDialog<bool>(
+    final result = await showDialog<
+        ({String time, String customerName, String serviceName})>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Tạo lịch hẹn mới'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: timeCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Giờ hẹn (VD: 17:30)',
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Tên & SĐT khách hàng',
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: serviceCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Dịch vụ & Kỹ thuật viên',
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Hủy'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Lưu lịch hẹn'),
-          ),
-        ],
-      ),
+      builder: (_) => const _QuickBookingDialog(),
     );
 
-    if (created == true && nameCtrl.text.trim().isNotEmpty) {
+    if (result != null && result.customerName.isNotEmpty) {
       try {
         final saved = await widget.inboxService.createBooking(
-          time: timeCtrl.text.trim(),
-          customerName: nameCtrl.text.trim(),
-          serviceName: serviceCtrl.text.trim(),
+          time: result.time,
+          customerName: result.customerName,
+          serviceName: result.serviceName,
         );
         if (!mounted) return;
         setState(() => _bookings = [saved, ..._bookings]);
@@ -703,7 +626,7 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
                     child: _SubTabButton(
                       selected: _subTab == 0,
                       icon: Icons.calendar_month,
-                      label: 'Ca trực & Lịch hẹn',
+                      label: 'Lịch hẹn & Nhắc việc',
                       onTap: () => setState(() => _subTab = 0),
                     ),
                   ),
@@ -752,13 +675,13 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
           Card(
             child: SwitchListTile(
               title: const Text(
-                'Trạng thái Ca trực nhận khách AI',
+                'Trạng thái tiếp nhận ca tư vấn',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
               subtitle: Text(
                 _onDuty
-                    ? 'Đang bật: Hệ thống tự động phân khách mới cho ca trực'
-                    : 'Đang tạm nghỉ: Chuyển khách cho nhân viên ca kế tiếp',
+                    ? 'Đang mở cửa tiếp nhận ca tư vấn chuyển từ Business AI'
+                    : 'Đang tạm nghỉ tiếp nhận ca mới',
               ),
               value: _onDuty,
               onChanged: _toggleDutyStatus,
@@ -1104,7 +1027,7 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Kịch bản & Bảng giá chuẩn của Chủ tiệm:',
+                    'Ghi chú phong cách tư vấn của Chủ tiệm:',
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 15,
@@ -1112,7 +1035,7 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
                   ),
                   const SizedBox(height: 6),
                   const Text(
-                    'AI sẽ dựa vào bảng giá và lưu ý này để soạn sẵn câu trả lời cho nhân viên duyệt.',
+                    'Gemini dựa vào ghi chú này để soạn nháp cho Chủ tiệm duyệt (không lưu bảng giá trong app; giá dịch vụ do Business AI trả lời).',
                     style: TextStyle(fontSize: 12, color: AppColors.textMuted),
                   ),
                   const SizedBox(height: 10),
@@ -1121,7 +1044,7 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
                     maxLines: 4,
                     decoration: const InputDecoration(
                       hintText:
-                          'VD: Mày sợi Hairstroke 3tr5, Môi Collagen 4tr. Ca khó sửa mày trổ xanh/đỏ cần xin ảnh cận mặt để chuyên gia lên phác đồ...',
+                          'VD: Ca khó sửa mày trổ xanh/đỏ cần xin ảnh cận mặt để Chủ tiệm lên phác đồ; luôn xưng Dạ - Em - Chị lịch sự...',
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -1135,7 +1058,7 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
                     label: Text(
                       _isSavingSettings
                           ? 'Đang lưu...'
-                          : 'Lưu kịch bản & bảng giá',
+                          : 'Lưu ghi chú tư vấn',
                     ),
                   ),
                 ],
@@ -1144,6 +1067,163 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _OnboardingCodeDialog extends StatefulWidget {
+  const _OnboardingCodeDialog();
+
+  @override
+  State<_OnboardingCodeDialog> createState() => _OnboardingCodeDialogState();
+}
+
+class _OnboardingCodeDialogState extends State<_OnboardingCodeDialog> {
+  final TextEditingController _codeCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _codeCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Nhập mã thiết lập tiệm'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Nhập mã thiết lập 1 lần để tạo tiệm và kích hoạt quyền Chủ tiệm cho tài khoản này.',
+            style: TextStyle(fontSize: 13, color: AppColors.textMuted),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _codeCtrl,
+            textCapitalization: TextCapitalization.characters,
+            decoration: const InputDecoration(
+              labelText: 'Mã thiết lập tiệm',
+              prefixIcon: Icon(Icons.key_outlined),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Hủy'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_codeCtrl.text.trim()),
+          child: const Text('Kích hoạt'),
+        ),
+      ],
+    );
+  }
+}
+
+class _QuickBookingDialog extends StatefulWidget {
+  const _QuickBookingDialog();
+
+  @override
+  State<_QuickBookingDialog> createState() => _QuickBookingDialogState();
+}
+
+class _QuickBookingDialogState extends State<_QuickBookingDialog> {
+  final TextEditingController _nameCtrl = TextEditingController();
+  final TextEditingController _timeCtrl = TextEditingController(text: '17:30');
+  final TextEditingController _serviceCtrl = TextEditingController();
+  String? _validationError;
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _timeCtrl.dispose();
+    _serviceCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final customerName = _nameCtrl.text.trim();
+    final serviceName = _serviceCtrl.text.trim();
+    if (customerName.isEmpty || serviceName.isEmpty) {
+      setState(() {
+        _validationError = 'Vui lòng nhập đầy đủ tên khách hàng và dịch vụ.';
+      });
+      return;
+    }
+    Navigator.of(context).pop((
+      time: _timeCtrl.text.trim(),
+      customerName: customerName,
+      serviceName: serviceName,
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Tạo lịch hẹn mới'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _timeCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Giờ hẹn (VD: 17:30)',
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _nameCtrl,
+              onChanged: (_) {
+                if (_validationError != null) {
+                  setState(() => _validationError = null);
+                }
+              },
+              decoration: const InputDecoration(
+                labelText: 'Tên & SĐT khách hàng',
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _serviceCtrl,
+              onChanged: (_) {
+                if (_validationError != null) {
+                  setState(() => _validationError = null);
+                }
+              },
+              decoration: const InputDecoration(
+                labelText: 'Dịch vụ',
+                hintText: 'Nhập tên dịch vụ của tiệm',
+              ),
+            ),
+            if (_validationError != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _validationError!,
+                style: const TextStyle(
+                  color: AppColors.danger,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Hủy'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('Lưu lịch hẹn'),
+        ),
+      ],
     );
   }
 }
