@@ -145,12 +145,8 @@ void main() {
       await tester.pageBack();
       await tester.pumpAndSettle();
 
-      // Scroll to Tài khoản section and verify sign out returns to LoginScreen
-      await tester.scrollUntilVisible(
-        find.text('Đăng xuất'),
-        200,
-        scrollable: find.byType(Scrollable).first,
-      );
+      // Scroll to Tài khoản section into visible viewport and verify sign out returns to LoginScreen
+      await tester.ensureVisible(find.text('Đăng xuất'));
       await tester.pumpAndSettle();
       expect(find.text('Tài khoản'), findsOneWidget);
       await tester.tap(find.text('Đăng xuất'));
