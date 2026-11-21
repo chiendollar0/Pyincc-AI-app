@@ -68,14 +68,13 @@ void main() {
       await tester.tap(find.text('Studio AI').last);
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Chọn ảnh mặt mộc của khách'), findsOneWidget);
-
-      await tester.tap(find.widgetWithText(ChoiceChip, 'Môi'));
-      await tester.pump();
-      expect(find.textContaining('Môi Collagen Cam Đào'), findsOneWidget);
-
-      await tester.tap(find.widgetWithText(ChoiceChip, 'Chân mày'));
-      await tester.pump();
-      expect(find.textContaining('Mày sợi Hairstroke Nâu Tây'), findsOneWidget);
+      // Per SPEC: no hardcoded default catalog items; shows empty-salon prompt
+      expect(find.textContaining('Môi Collagen Cam Đào'), findsNothing);
+      expect(find.textContaining('Mày sợi Hairstroke Nâu Tây'), findsNothing);
+      expect(
+        find.textContaining('Chưa có dịch vụ trong danh mục tiệm'),
+        findsOneWidget,
+      );
 
       // Verify Logout button on the active tab returns to LoginScreen
       await tester.tap(find.byIcon(Icons.logout).hitTestable().first);

@@ -928,22 +928,39 @@ function vnDateString(dateObj = new Date()) {
 }
 
 app.get('/bookings/reminders', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
-  const { data, error } = await supabase.from('bookings')
-    .select('id, customer_name, customer_phone, service_name, scheduled_at, service_date, followup_done, notes, status')
-    .eq('org_id', req.orgId)
-    .neq('status', 'cancelled')
-    .order('scheduled_at', { ascending: true })
-    .limit(200);
-  if (error) return res.status(500).json({ error: 'Failed to load booking reminders' });
-
   const todayStr = vnDateString(new Date());
   const sevenDaysAgoStr = vnDateString(new Date(Date.now() - 7 * 24 * 3600 * 1000));
-  const rows = Array.isArray(data) ? data : [];
-  const today = rows.filter((b) => {
+  const todayStartUtc = new Date(`${todayStr}T00:00:00+07:00`).toISOString();
+  const todayEndUtc = new Date(`${todayStr}T23:59:59.999+07:00`).toISOString();
+  const cutoffEndUtc = new Date(`${sevenDaysAgoStr}T23:59:59.999+07:00`).toISOString();
+  const selectCols = 'id, customer_name, customer_phone, service_name, scheduled_at, service_date, followup_done, notes, status';
+
+  const [todayRes, followupRes] = await Promise.all([
+    supabase.from('bookings')
+      .select(selectCols)
+      .eq('org_id', req.orgId)
+      .neq('status', 'cancelled')
+      .or(`service_date.eq.${todayStr},and(service_date.is.null,scheduled_at.gte.${todayStartUtc},scheduled_at.lte.${todayEndUtc})`)
+      .order('scheduled_at', { ascending: true })
+      .limit(500),
+    supabase.from('bookings')
+      .select(selectCols)
+      .eq('org_id', req.orgId)
+      .neq('status', 'cancelled')
+      .eq('followup_done', false)
+      .or(`service_date.lte.${sevenDaysAgoStr},and(service_date.is.null,scheduled_at.lte.${cutoffEndUtc})`)
+      .order('scheduled_at', { ascending: true })
+      .limit(500),
+  ]);
+  if (todayRes.error || followupRes.error) {
+    return res.status(500).json({ error: 'Failed to load booking reminders' });
+  }
+
+  const today = (Array.isArray(todayRes.data) ? todayRes.data : []).filter((b) => {
     const day = b.service_date || (b.scheduled_at ? vnDateString(new Date(b.scheduled_at)) : null);
     return day === todayStr;
   });
-  const dueFollowups = rows.filter((b) => {
+  const dueFollowups = (Array.isArray(followupRes.data) ? followupRes.data : []).filter((b) => {
     if (b.followup_done) return false;
     const day = b.service_date || (b.scheduled_at ? vnDateString(new Date(b.scheduled_at)) : null);
     return Boolean(day && day <= sevenDaysAgoStr);
@@ -1476,7 +1493,7 @@ app.post('/handoff-cases/:id/reject', writeLimiter, requireAuth, requireRole('ow
   const { data, error } = await supabase.from('handoff_cases').update({ status: 'rejected' })
     .eq('id', req.params.id)
     .eq('org_id', req.orgId)
-    .in('status', ['new', 'pending_review', 'approved'])
+    .in('status', ['new', 'pending_review', 'approved', 'failed'])
     .select('id, status')
     .maybeSingle();
   if (error || !data) return res.status(404).json({ error: 'NOT_REJECTABLE' });
@@ -1529,11 +1546,12 @@ app.post('/handoff-cases/:id/send', writeLimiter, requireAuth, requireRole('owne
 
 app.post('/handoff-cases/:id/release', writeLimiter, requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data: c } = await supabase.from('handoff_cases')
-    .select('id, org_id, page_id, psid')
+    .select('id, org_id, page_id, psid, status')
     .eq('id', req.params.id)
     .eq('org_id', req.orgId)
     .maybeSingle();
   if (!c) return res.status(404).json({ error: 'NOT_FOUND' });
+  if (c.status === 'sending') return res.status(409).json({ error: 'ALREADY_SENDING' });
   if (!c.psid || !c.page_id) return res.status(422).json({ error: 'NO_RECIPIENT' });
 
   const page = await resolvePageCredentialsForOrg(req.orgId, c.page_id);
@@ -1554,6 +1572,14 @@ app.post('/handoff-cases/:id/release', writeLimiter, requireAuth, requireRole('o
     .eq('page_id', c.page_id)
     .eq('psid', c.psid);
 
+  // Close open cases on this thread so no stale send/release action can race with Business AI
+  await supabase.from('handoff_cases')
+    .update({ status: 'rejected' })
+    .eq('org_id', req.orgId)
+    .eq('page_id', c.page_id)
+    .eq('psid', c.psid)
+    .in('status', ['new', 'pending_review', 'approved', 'failed']);
+
   await recordAuditLog({
     orgId: req.orgId,
     actorUserId: req.authUser.id,
@@ -1563,7 +1589,7 @@ app.post('/handoff-cases/:id/release', writeLimiter, requireAuth, requireRole('o
     targetId: c.id,
     metadata: { page_id: page.pageId },
   });
-  return res.json({ success: true, released: true });
+  return res.json({ success: true, released: true, status: c.status === 'sent' ? 'sent' : 'rejected' });
 }));
 
 app.get('/webhook', (req, res) => {

@@ -18,13 +18,6 @@ class _Item {
   final String category; // 'eyebrow' | 'lip' | 'other'
 }
 
-const _defaultCatalog = <_Item>[
-  _Item('1', 'Mày sợi Hairstroke Nâu Tây', 'eyebrow'),
-  _Item('2', 'Mày Shading Ombre', 'eyebrow'),
-  _Item('3', 'Môi Collagen Cam Đào', 'lip'),
-  _Item('4', 'Môi Khử Thâm Hồng Baby', 'lip'),
-];
-
 class TryOnStudioScreen extends StatefulWidget {
   const TryOnStudioScreen({
     super.key,
@@ -48,7 +41,7 @@ class TryOnStudioScreen extends StatefulWidget {
 class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   final _picker = ImagePicker();
 
-  List<_Item> _catalog = _defaultCatalog;
+  List<_Item> _catalog = const <_Item>[];
   File? _image;
   HandoffCase? _caseResult;
   String _filter = 'all';
@@ -75,14 +68,21 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     if (svc == null) return;
     try {
       final live = await svc.fetchItems();
-      if (!mounted || live.isEmpty) return;
+      if (!mounted) return;
+      final next = live
+          .map((e) => _Item(e.id, e.name, e.category))
+          .toList();
       setState(() {
-        _catalog = live
-            .map((e) => _Item(e.id, e.name, e.category))
-            .toList();
+        _catalog = next;
+        if (_selectedId != null && !next.any((e) => e.id == _selectedId)) {
+          _selectedId = null;
+        }
+        if (_filter == 'other' && !next.any((e) => e.category == 'other')) {
+          _filter = 'all';
+        }
       });
     } catch (_) {
-      // Giữ danh mục tham khảo mặc định khi ngoại tuyến hoặc chưa cấu hình
+      // Giữ trạng thái danh mục hiện tại khi ngoại tuyến hoặc chưa cấu hình
     }
   }
 
@@ -379,6 +379,14 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   }
 
   Widget _catalogSection() {
+    if (_catalog.isEmpty) {
+      return const _Card(
+        child: Text(
+          'Chưa có dịch vụ trong danh mục tiệm. Thêm dịch vụ tại Cài đặt → Danh mục dịch vụ.',
+          style: TextStyle(color: AppColors.textMuted),
+        ),
+      );
+    }
     final hasOther = _catalog.any((e) => e.category == 'other');
     final filters = <(String, String)>[
       ('all', 'Tất cả'),

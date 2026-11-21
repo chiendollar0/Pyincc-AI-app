@@ -164,6 +164,48 @@ function createMockEnv() {
         filters.push((r) => String(r[col] ?? '') >= String(val ?? ''));
         return q;
       },
+      lte(col, val) {
+        filters.push((r) => String(r[col] ?? '') <= String(val ?? ''));
+        return q;
+      },
+      or(expr) {
+        const evalLeaf = (row, leaf) => {
+          const parts = leaf.split('.');
+          const col = parts[0];
+          const op = parts[1];
+          const val = parts.slice(2).join('.');
+          if (op === 'eq') return String(row[col] ?? '') === val;
+          if (op === 'lte') return row[col] != null && String(row[col]) <= val;
+          if (op === 'gte') return row[col] != null && String(row[col]) >= val;
+          if (op === 'is' && val === 'null') return row[col] === null || row[col] === undefined;
+          return true;
+        };
+        const splitTop = (s) => {
+          const out = [];
+          let depth = 0;
+          let cur = '';
+          for (const ch of s) {
+            if (ch === '(') depth += 1;
+            else if (ch === ')') depth -= 1;
+            if (ch === ',' && depth === 0) {
+              out.push(cur);
+              cur = '';
+            } else {
+              cur += ch;
+            }
+          }
+          if (cur) out.push(cur);
+          return out;
+        };
+        const branches = splitTop(expr);
+        filters.push((row) => branches.some((b) => {
+          if (b.startsWith('and(') && b.endsWith(')')) {
+            return splitTop(b.slice(4, -1)).every((leaf) => evalLeaf(row, leaf));
+          }
+          return evalLeaf(row, b);
+        }));
+        return q;
+      },
       in(col, list) {
         const set = new Set(list.map(String));
         filters.push((r) => set.has(String(r[col] ?? '')));
@@ -791,12 +833,26 @@ test('Price-free /catalog CRUD: owner manages items with audit_logs; non-owner b
   assert.ok(actions.includes('catalog.delete'));
 });
 
-test('7-day booking reminders & case release: returns due follow-ups, marks done, and releases thread control', async () => {
+test('7-day booking reminders & case release: filters due follow-ups past 200 old rows, closes open case on release, and allows rejecting failed cases', async () => {
   const { state, invoke, tokens } = createMockEnv();
   const vnToday = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
   const tenDaysAgo = new Date(Date.now() + 7 * 3600 * 1000 - 10 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const thirtyDaysAgo = new Date(Date.now() + 7 * 3600 * 1000 - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+  // Seed 220 older already-checked bookings to verify due follow-ups & today's bookings are never crowded out
+  const oldChecked = Array.from({ length: 220 }, (_, i) => ({
+    id: `bk-old-${i}`,
+    org_id: 'org-1',
+    customer_name: `Khách cũ ${i}`,
+    service_name: 'Môi Collagen',
+    scheduled_at: new Date(Date.now() - (40 + i) * 24 * 3600 * 1000).toISOString(),
+    service_date: thirtyDaysAgo,
+    followup_done: true,
+    status: 'done',
+  }));
 
   state.tables.bookings = [
+    ...oldChecked,
     {
       id: 'bk-today',
       org_id: 'org-1',
@@ -822,6 +878,7 @@ test('7-day booking reminders & case release: returns due follow-ups, marks done
   const rem1 = await invoke('GET', '/bookings/reminders', { token: tokens.ownerToken });
   assert.equal(rem1.statusCode, 200);
   assert.equal(rem1.body.today.length, 1);
+  assert.equal(rem1.body.today[0].id, 'bk-today');
   assert.equal(rem1.body.dueFollowups.length, 1);
   assert.equal(rem1.body.dueFollowups[0].id, 'bk-due');
 
@@ -835,14 +892,17 @@ test('7-day booking reminders & case release: returns due follow-ups, marks done
   const rem2 = await invoke('GET', '/bookings/reminders', { token: tokens.ownerToken });
   assert.equal(rem2.body.dueFollowups.length, 0);
 
-  // Release thread control
+  // Release thread control on an approved case: must close case so a subsequent send is blocked
   state.tables.handoff_cases.push({
     id: 'case-rel-1',
     org_id: 'org-1',
     source: 'business_ai_handover',
     page_id: 'page-test-1',
     psid: 'psid-rel-1',
-    status: 'sent',
+    status: 'approved',
+    draft_reply: 'Nháp đã duyệt',
+    approved_by: 'owner-user-1',
+    approved_at: new Date().toISOString(),
   });
   state.tables.handover_threads = [{
     org_id: 'org-1',
@@ -853,8 +913,28 @@ test('7-day booking reminders & case release: returns due follow-ups, marks done
   const rel = await invoke('POST', '/handoff-cases/case-rel-1/release', { token: tokens.ownerToken });
   assert.equal(rel.statusCode, 200);
   assert.equal(rel.body.released, true);
+  assert.equal(rel.body.status, 'rejected');
   assert.equal(state.tables.handover_threads[0].active, false);
+  const relCase = state.tables.handoff_cases.find((c) => c.id === 'case-rel-1');
+  assert.equal(relCase.status, 'rejected');
   assert.ok(state.axiosCalls.some((c) => c.url.includes('/release_thread_control')));
   assert.ok(state.tables.audit_logs.some((l) => l.action === 'handoff_case.release'));
+
+  const sendAfterRelease = await invoke('POST', '/handoff-cases/case-rel-1/send', { token: tokens.ownerToken });
+  assert.equal(sendAfterRelease.statusCode, 403);
+  assert.equal(sendAfterRelease.body.error, 'NOT_APPROVED');
+
+  // Failed handoff case can be rejected/dismissed from inbox
+  state.tables.handoff_cases.push({
+    id: 'case-failed-1',
+    org_id: 'org-1',
+    source: 'business_ai_handover',
+    page_id: 'page-test-1',
+    psid: 'psid-fail-1',
+    status: 'failed',
+  });
+  const rejFailed = await invoke('POST', '/handoff-cases/case-failed-1/reject', { token: tokens.ownerToken });
+  assert.equal(rejFailed.statusCode, 200);
+  assert.equal(rejFailed.body.status, 'rejected');
 });
 
