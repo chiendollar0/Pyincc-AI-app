@@ -19,8 +19,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify backend syntax
-        run: node --check backend_bridge/meta-webhook/index.js
+      - name: Verify backend syntax & tests
+        run: |
+          node --check backend_bridge/meta-webhook/index.js
+          node --test backend_bridge/meta-webhook/test/handoff_and_memberships.test.js
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2

@@ -91,6 +91,26 @@ class ApiClient {
     return _decodeObjectResponse(response);
   }
 
+  Future<Map<String, dynamic>> patch(
+    String path,
+    Map<String, dynamic> body, {
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    late final http.Response response;
+    try {
+      response = await http
+          .patch(
+            _uri(path),
+            headers: _headers(json: true),
+            body: jsonEncode(body),
+          )
+          .timeout(timeout);
+    } on SocketException {
+      throw const SocketException('network_unreachable');
+    }
+    return _decodeObjectResponse(response);
+  }
+
   Map<String, dynamic> _decodeObjectResponse(http.Response response) {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       String serverCode = 'Yêu cầu chưa thành công.';

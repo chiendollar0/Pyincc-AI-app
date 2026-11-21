@@ -21,8 +21,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Check backend syntax
-        run: node --check backend_bridge/meta-webhook/index.js
+      - name: Check backend syntax & tests
+        run: |
+          node --check backend_bridge/meta-webhook/index.js
+          node --test backend_bridge/meta-webhook/test/handoff_and_memberships.test.js
 
       - name: Setup Java 17
         uses: actions/setup-java@v4

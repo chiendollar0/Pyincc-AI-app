@@ -210,21 +210,29 @@ app.get('/privacy', (_req, res) => res.type('html').send(
   '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Chính sách Quyền riêng tư — PyinccCRM</title></head>' +
   '<body style="font-family:sans-serif;max-width:720px;margin:32px auto;padding:0 16px;line-height:1.6;">' +
   '<h1>Chính sách Quyền riêng tư — PyinccCRM</h1>' +
-  '<p>PyinccCRM thu thập và xử lý tin nhắn Fanpage, hình ảnh khách hàng gửi để tư vấn, và thông tin quản trị viên Fanpage do chủ tiệm cấp quyền nhằm mục đích chăm sóc khách hàng, đặt lịch hẹn và hỗ trợ tư vấn thẩm mỹ.</p>' +
+  '<p>PyinccCRM là công cụ hỗ trợ nội bộ cho chủ tiệm và nhân viên được cấp quyền quản lý ca tư vấn, lịch hẹn và phản hồi khách hàng. Mọi tin nhắn gửi tới khách đều do chủ tiệm hoặc nhân viên kiểm duyệt và xác nhận thủ công.</p>' +
   '<h2>Các bên thứ ba xử lý dữ liệu</h2>' +
   '<ul>' +
-  '<li><strong>Supabase:</strong> lưu trữ cơ sở dữ liệu hội thoại, lịch hẹn và tệp ảnh khách hàng trong bucket riêng tư (truy cập qua đường dẫn ký có thời hạn).</li>' +
-  '<li><strong>Google Gemini API:</strong> tiếp nhận ảnh khách hàng (đã xóa siêu dữ liệu EXIF) thông qua Supabase Edge Function để phân tích dáng mặt, tông da và gợi ý mẫu tư vấn cho nhân viên.</li>' +
-  '<li><strong>Meta Platforms:</strong> nhận và gửi tin nhắn Messenger khi chủ tiệm kết nối Fanpage.</li>' +
+  '<li><strong>Supabase:</strong> lưu trữ cơ sở dữ liệu hội thoại, lịch hẹn, nhật ký phân quyền và tệp ảnh khách hàng trong bucket riêng tư tách biệt theo từng tiệm (RLS), truy cập qua đường dẫn ký có thời hạn (1 giờ).</li>' +
+  '<li><strong>Google Gemini API:</strong> tiếp nhận ảnh khách hàng (đã xóa siêu dữ liệu EXIF/GPS trước khi tải lên) và ghi chú ca tư vấn từ máy chủ PyinccCRM để phân tích dáng mặt và soạn gợi ý nội bộ cho chủ tiệm. Gemini không tự kết nối Facebook và không tự gửi tin nhắn cho khách.</li>' +
+  '<li><strong>Meta Platforms:</strong> tiếp nhận webhook hội thoại được chuyển giao và gửi phản hồi Messenger đã được chủ tiệm/nhân viên duyệt sau khi tiệm chủ động kết nối Fanpage.</li>' +
   '</ul>' +
-  '<p><strong>Thời gian lưu trữ &amp; Xóa dữ liệu:</strong> Dữ liệu được lưu trong thời gian tiệm sử dụng dịch vụ hoặc đến khi có yêu cầu xóa. Xem hướng dẫn xóa dữ liệu tại <a href="/data-deletion">/data-deletion</a> hoặc liên hệ <strong>phanhungkg03@gmail.com</strong>.</p></body></html>'
+  '<h2>Thời gian lưu trữ &amp; Quyền xóa dữ liệu</h2>' +
+  '<p>Dữ liệu hội thoại, ảnh tư vấn và nhật ký được lưu trong thời gian tiệm sử dụng dịch vụ hoặc cho đến khi chủ tiệm/khách hàng yêu cầu xóa; đường dẫn ảnh tạm tự hết hạn sau 60 phút.</p>' +
+  '<p>Để thu hồi quyền và xóa dữ liệu, xem hướng dẫn tại <a href="/data-deletion">/data-deletion</a>, gỡ ứng dụng PyinccCRM trong cài đặt Facebook Business Integrations (hệ thống tự động xóa Page Token và gỡ liên kết Facebook kèm mã xác nhận), hoặc gửi email về <strong>phanhungkg03@gmail.com</strong> (xử lý trong vòng 48 giờ).</p></body></html>'
 ));
 app.get('/terms', (_req, res) => res.type('html').send(
   '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Điều khoản Dịch vụ — PyinccCRM</title></head>' +
   '<body style="font-family:sans-serif;max-width:720px;margin:32px auto;padding:0 16px;line-height:1.6;">' +
   '<h1>Điều khoản Dịch vụ — PyinccCRM</h1>' +
-  '<p>PyinccCRM là công cụ hỗ trợ chủ tiệm và nhân viên quản lý hội thoại Messenger, lịch hẹn và mô phỏng mẫu tư vấn. Chủ tiệm chịu trách nhiệm kiểm duyệt mọi nội dung trước khi gửi tới khách hàng.</p>' +
-  '<p>Liên hệ: phanhungkg03@gmail.com</p></body></html>'
+  '<p>PyinccCRM là công cụ hỗ trợ chủ tiệm và nhân viên được cấp quyền quản lý ca tư vấn thẩm mỹ, lịch hẹn và phản hồi Messenger.</p>' +
+  '<ul>' +
+  '<li><strong>Kiểm duyệt bắt buộc:</strong> Chủ tiệm và nhân viên chịu trách nhiệm kiểm tra, chỉnh sửa và duyệt mọi nội dung trước khi gửi tới khách hàng.</li>' +
+  '<li><strong>Sự đồng ý của khách hàng:</strong> Chủ tiệm/nhân viên phải xin sự đồng ý của khách trước khi chụp hoặc tải ảnh lên hệ thống phân tích.</li>' +
+  '<li><strong>Phân quyền nhân viên:</strong> Chủ tiệm chịu trách nhiệm mời, phân quyền và thu hồi quyền nhân viên khi thay đổi nhân sự.</li>' +
+  '<li><strong>Giới hạn AI:</strong> Gợi ý từ Google Gemini chỉ mang tính tham khảo nội bộ, không phải chẩn đoán y tế và không thay thế quyết định chuyên môn của kỹ thuật viên.</li>' +
+  '</ul>' +
+  '<p>Liên hệ hỗ trợ &amp; pháp lý: <strong>phanhungkg03@gmail.com</strong></p></body></html>'
 ));
 app.get('/data-deletion', asyncHandler(async (req, res) => {
   const rawCode = typeof req.query.code === 'string' ? req.query.code.trim() : '';
@@ -266,12 +274,61 @@ app.post('/api/tryon/generate', writeLimiter, requireAuth, requireRole('owner', 
   });
 }));
 
+async function recordAuditLog({
+  orgId,
+  actorUserId = null,
+  actorRole = null,
+  action,
+  targetType = null,
+  targetId = null,
+  metadata = {},
+}) {
+  if (!supabase || !orgId || !action) return;
+  try {
+    const { error } = await supabase.from('audit_logs').insert({
+      org_id: orgId,
+      actor_user_id: actorUserId,
+      actor_role: actorRole,
+      action,
+      target_type: targetType,
+      target_id: targetId ? String(targetId) : null,
+      metadata: metadata && typeof metadata === 'object' ? metadata : {},
+      created_at: new Date().toISOString(),
+    });
+    if (error) {
+      console.warn(JSON.stringify({ event: 'audit_log_write_warning', action, message: error.message }));
+    }
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: 'audit_log_write_warning',
+      action,
+      message: err instanceof Error ? err.message : String(err),
+    }));
+  }
+}
+
+async function countActiveOwners(orgId) {
+  const { count } = await supabase.from('memberships')
+    .select('id', { count: 'exact', head: true })
+    .eq('org_id', orgId)
+    .eq('role', 'owner')
+    .eq('status', 'active');
+  return count || 0;
+}
+
+app.get('/me', requireAuth, requireRole('owner', 'staff'), (req, res) => res.json({
+  userId: req.authUser.id,
+  email: req.authUser.email || null,
+  orgId: req.orgId,
+  role: req.userRole,
+}));
+
 app.get('/memberships', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from('memberships')
-    .select('id, org_id, user_id, invited_email, invited_fb_user_id, role, status, created_at')
+    .select('id, org_id, user_id, invited_email, invited_fb_user_id, role, status, created_at, updated_at')
     .eq('org_id', req.orgId).order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: 'Failed to load memberships' });
-  return res.json({ memberships: data || [] });
+  return res.json({ memberships: data || [], currentUserId: req.authUser.id });
 }));
 
 app.post('/memberships/invite', authWriteLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
@@ -281,6 +338,7 @@ app.post('/memberships/invite', authWriteLimiter, requireAuth, requireRole('owne
   const invitedFbUserId = typeof req.body?.fbUserId === 'string' && req.body.fbUserId.trim()
     ? req.body.fbUserId.trim()
     : null;
+  const requestedRole = req.body?.role === 'owner' ? 'owner' : 'staff';
   if (!invitedEmail && !invitedFbUserId) return res.status(400).json({ error: 'email or fbUserId is required to invite staff' });
 
   if (invitedEmail) {
@@ -304,7 +362,7 @@ app.post('/memberships/invite', authWriteLimiter, requireAuth, requireRole('owne
 
   const { data, error } = await supabase.from('memberships').insert({
     org_id: req.orgId, invited_email: invitedEmail, invited_fb_user_id: invitedFbUserId,
-    role: 'staff', status: 'pending',
+    role: requestedRole, status: 'pending',
   }).select('id, org_id, invited_email, invited_fb_user_id, role, status, created_at').single();
   if (error) {
     if (error.code === '23505') {
@@ -312,7 +370,152 @@ app.post('/memberships/invite', authWriteLimiter, requireAuth, requireRole('owne
     }
     return res.status(500).json({ error: 'Failed to create staff invitation' });
   }
+  await recordAuditLog({
+    orgId: req.orgId,
+    actorUserId: req.authUser.id,
+    actorRole: req.userRole,
+    action: 'membership.invite',
+    targetType: 'membership',
+    targetId: data.id,
+    metadata: { invited_email: invitedEmail, role: requestedRole },
+  });
   return res.json({ success: true, invitation: data });
+}));
+
+app.patch('/memberships/:id', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+  const nextRole = req.body?.role !== undefined ? String(req.body.role).trim() : undefined;
+  const nextStatus = req.body?.status !== undefined ? String(req.body.status).trim() : undefined;
+  if (nextRole !== undefined && !['owner', 'staff'].includes(nextRole)) {
+    return res.status(400).json({ error: 'INVALID_ROLE' });
+  }
+  if (nextStatus !== undefined && !['active', 'revoked'].includes(nextStatus)) {
+    return res.status(400).json({ error: 'INVALID_STATUS' });
+  }
+  if (nextRole === undefined && nextStatus === undefined) {
+    return res.status(400).json({ error: 'NO_CHANGES' });
+  }
+
+  const { data: target, error: findErr } = await supabase.from('memberships')
+    .select('id, org_id, user_id, invited_email, role, status')
+    .eq('id', req.params.id)
+    .eq('org_id', req.orgId)
+    .maybeSingle();
+  if (findErr || !target) return res.status(404).json({ error: 'MEMBERSHIP_NOT_FOUND' });
+
+  if (target.user_id && String(target.user_id) === String(req.authUser.id)) {
+    return res.status(400).json({ error: 'CANNOT_MODIFY_SELF' });
+  }
+  if (nextStatus === 'active' && !target.user_id) {
+    return res.status(400).json({ error: 'INVITATION_NOT_ACCEPTED' });
+  }
+
+  const demotingActiveOwner = target.role === 'owner' && target.status === 'active' &&
+    ((nextRole !== undefined && nextRole !== 'owner') || nextStatus === 'revoked');
+  if (demotingActiveOwner) {
+    const activeOwners = await countActiveOwners(req.orgId);
+    if (activeOwners <= 1) {
+      return res.status(409).json({ error: 'LAST_OWNER_PROTECTED' });
+    }
+  }
+
+  const patch = { updated_at: new Date().toISOString() };
+  if (nextRole !== undefined) patch.role = nextRole;
+  if (nextStatus !== undefined) patch.status = nextStatus;
+
+  const { data: updated, error: updateErr } = await supabase.from('memberships')
+    .update(patch)
+    .eq('id', target.id)
+    .eq('org_id', req.orgId)
+    .select('id, org_id, user_id, invited_email, invited_fb_user_id, role, status, created_at, updated_at')
+    .single();
+  if (updateErr || !updated) return res.status(500).json({ error: 'Failed to update membership' });
+
+  if (nextRole !== undefined && nextRole !== target.role) {
+    await recordAuditLog({
+      orgId: req.orgId,
+      actorUserId: req.authUser.id,
+      actorRole: req.userRole,
+      action: 'membership.role_changed',
+      targetType: 'membership',
+      targetId: updated.id,
+      metadata: {
+        invited_email: target.invited_email,
+        from_role: target.role,
+        to_role: nextRole,
+      },
+    });
+  }
+  if (nextStatus !== undefined && nextStatus !== target.status) {
+    await recordAuditLog({
+      orgId: req.orgId,
+      actorUserId: req.authUser.id,
+      actorRole: req.userRole,
+      action: nextStatus === 'revoked' ? 'membership.revoked' : 'membership.reactivated',
+      targetType: 'membership',
+      targetId: updated.id,
+      metadata: {
+        invited_email: target.invited_email,
+        from_status: target.status,
+        to_status: nextStatus,
+      },
+    });
+  }
+  return res.json({ success: true, membership: updated });
+}));
+
+app.post('/memberships/:id/revoke', writeLimiter, requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
+  const { data: target, error: findErr } = await supabase.from('memberships')
+    .select('id, org_id, user_id, invited_email, role, status')
+    .eq('id', req.params.id)
+    .eq('org_id', req.orgId)
+    .maybeSingle();
+  if (findErr || !target) return res.status(404).json({ error: 'MEMBERSHIP_NOT_FOUND' });
+
+  if (target.user_id && String(target.user_id) === String(req.authUser.id)) {
+    return res.status(400).json({ error: 'CANNOT_MODIFY_SELF' });
+  }
+  if (target.role === 'owner' && target.status === 'active') {
+    const activeOwners = await countActiveOwners(req.orgId);
+    if (activeOwners <= 1) {
+      return res.status(409).json({ error: 'LAST_OWNER_PROTECTED' });
+    }
+  }
+  if (target.status === 'revoked') {
+    return res.json({ success: true, membership: target });
+  }
+
+  const { data: updated, error: updateErr } = await supabase.from('memberships')
+    .update({ status: 'revoked', updated_at: new Date().toISOString() })
+    .eq('id', target.id)
+    .eq('org_id', req.orgId)
+    .select('id, org_id, user_id, invited_email, invited_fb_user_id, role, status, created_at, updated_at')
+    .single();
+  if (updateErr || !updated) return res.status(500).json({ error: 'Failed to revoke membership' });
+
+  await recordAuditLog({
+    orgId: req.orgId,
+    actorUserId: req.authUser.id,
+    actorRole: req.userRole,
+    action: 'membership.revoked',
+    targetType: 'membership',
+    targetId: updated.id,
+    metadata: { invited_email: target.invited_email, previous_status: target.status, role: target.role },
+  });
+  return res.json({ success: true, membership: updated });
+}));
+
+app.get('/audit-logs', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+  const { data, error } = await supabase.from('audit_logs')
+    .select('id, org_id, actor_user_id, actor_role, action, target_type, target_id, metadata, created_at')
+    .eq('org_id', req.orgId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.error(JSON.stringify({ event: 'fetch_audit_logs_failed', message: error.message }));
+    return res.status(500).json({ error: 'Failed to fetch audit logs' });
+  }
+  return res.json({ logs: data || [] });
 }));
 
 app.post('/auth/facebook/exchange-token', authWriteLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
@@ -845,26 +1048,30 @@ async function loadCatalog(orgId) {
   return Array.isArray(data) ? data : [];
 }
 
-async function dailyAiCount(orgId) {
+async function dailyAiCount(orgId, excludeCaseId = null) {
   const vnNow = new Date(Date.now() + 7 * 3600 * 1000);
   const yyyy = vnNow.getUTCFullYear();
   const mo = String(vnNow.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(vnNow.getUTCDate()).padStart(2, '0');
   const startOfVnDayIso = new Date(`${yyyy}-${mo}-${dd}T00:00:00+07:00`).toISOString();
-  const { count } = await supabase.from('handoff_cases')
+  let query = supabase.from('handoff_cases')
     .select('id', { count: 'exact', head: true })
     .eq('org_id', orgId)
     .gte('created_at', startOfVnDayIso)
     .in('status', ['analyzing', 'pending_review', 'approved', 'sending', 'sent', 'rejected']);
+  if (excludeCaseId) {
+    query = query.neq('id', excludeCaseId);
+  }
+  const { count } = await query;
   return count || 0;
 }
 
-async function analyzeCase({ orgId, text, imageBase64, mime, catalog }) {
+async function analyzeCase({ orgId, text, imageBase64, mime, catalog, excludeCaseId = null }) {
   const geminiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!geminiKey) {
     throw Object.assign(new Error('GEMINI_NOT_CONFIGURED'), { code: 'GEMINI_NOT_CONFIGURED' });
   }
-  const cap = await dailyAiCount(orgId);
+  const cap = await dailyAiCount(orgId, excludeCaseId);
   if (cap >= HANDOFF_DAILY_AI_CAP) {
     throw Object.assign(new Error('AI_DAILY_CAP'), { code: 'AI_DAILY_CAP' });
   }
@@ -930,12 +1137,28 @@ app.get('/handoff-cases', requireAuth, requireRole('owner', 'staff'), asyncHandl
 app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner', 'staff'),
   express.json({ limit: '15mb' }), asyncHandler(async (req, res) => {
     const imageBase64 = String(req.body?.image_base64 || '').trim();
-    const customerText = typeof req.body?.customer_text === 'string' ? req.body.customer_text.trim() : null;
+    const customerText = typeof req.body?.customer_text === 'string' && req.body.customer_text.trim()
+      ? req.body.customer_text.trim()
+      : null;
+    const psid = typeof req.body?.psid === 'string' && req.body.psid.trim()
+      ? req.body.psid.trim()
+      : null;
+    const pageId = typeof req.body?.page_id === 'string' && req.body.page_id.trim()
+      ? req.body.page_id.trim()
+      : null;
     if (!imageBase64) return res.status(400).json({ error: 'IMAGE_REQUIRED' });
     const buf = Buffer.from(imageBase64, 'base64');
     if (!buf.length || buf.length > 15 * 1024 * 1024) return res.status(413).json({ error: 'IMAGE_TOO_LARGE' });
     const mime = detectImageMime(buf);
     if (!mime) return res.status(415).json({ error: 'UNSUPPORTED_IMAGE_TYPE' });
+
+    const geminiKey = String(process.env.GEMINI_API_KEY || '').trim();
+    if (!geminiKey) return res.status(503).json({ error: 'GEMINI_NOT_CONFIGURED' });
+    const currentDailyCount = await dailyAiCount(req.orgId);
+    if (currentDailyCount >= HANDOFF_DAILY_AI_CAP) {
+      return res.status(429).json({ error: 'AI_DAILY_CAP' });
+    }
+
     const ext = mime === 'image/png' ? 'png' : (mime === 'image/webp' ? 'webp' : 'jpg');
     const storagePath = `owner/${req.orgId}/${crypto.randomUUID()}.${ext}`;
     const { error: upErr } = await uploadWithRetry(storagePath, buf, mime);
@@ -944,6 +1167,8 @@ app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner
     const { data: row, error: insertErr } = await supabase.from('handoff_cases').insert({
       org_id: req.orgId,
       source: 'owner_capture',
+      page_id: pageId,
+      psid,
       customer_text: customerText,
       image_path: storagePath,
       created_by: req.authUser.id,
@@ -952,7 +1177,14 @@ app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner
     if (insertErr || !row) return res.status(500).json({ error: 'CASE_CREATE_FAILED' });
 
     try {
-      const analysis = await analyzeCase({ orgId: req.orgId, text: customerText, imageBase64, mime, catalog });
+      const analysis = await analyzeCase({
+        orgId: req.orgId,
+        text: customerText,
+        imageBase64,
+        mime,
+        catalog,
+        excludeCaseId: row.id,
+      });
       await supabase.from('handoff_cases').update({
         analysis,
         draft_reply: analysis.draft_reply || null,
@@ -986,7 +1218,14 @@ app.post('/handoff-cases/:id/analyze', writeLimiter, requireAuth, requireRole('o
       }
     }
     const catalog = await loadCatalog(req.orgId);
-    const analysis = await analyzeCase({ orgId: req.orgId, text: row.customer_text, imageBase64, mime, catalog });
+    const analysis = await analyzeCase({
+      orgId: req.orgId,
+      text: row.customer_text,
+      imageBase64,
+      mime,
+      catalog,
+      excludeCaseId: row.id,
+    });
     await supabase.from('handoff_cases').update({
       analysis,
       draft_reply: analysis.draft_reply || null,
@@ -1016,6 +1255,14 @@ app.post('/handoff-cases/:id/approve', writeLimiter, requireAuth, requireRole('o
       .select('id, status')
       .maybeSingle();
     if (error || !data) return res.status(404).json({ error: 'NOT_PENDING' });
+    await recordAuditLog({
+      orgId: req.orgId,
+      actorUserId: req.authUser.id,
+      actorRole: req.userRole,
+      action: 'handoff_case.approve',
+      targetType: 'handoff_case',
+      targetId: data.id,
+    });
     return res.json({ success: true, id: data.id, status: data.status });
   }));
 
@@ -1027,6 +1274,14 @@ app.post('/handoff-cases/:id/reject', writeLimiter, requireAuth, requireRole('ow
     .select('id, status')
     .maybeSingle();
   if (error || !data) return res.status(404).json({ error: 'NOT_REJECTABLE' });
+  await recordAuditLog({
+    orgId: req.orgId,
+    actorUserId: req.authUser.id,
+    actorRole: req.userRole,
+    action: 'handoff_case.reject',
+    targetType: 'handoff_case',
+    targetId: data.id,
+  });
   return res.json({ success: true, id: data.id, status: data.status });
 }));
 
@@ -1049,6 +1304,15 @@ app.post('/handoff-cases/:id/send', writeLimiter, requireAuth, requireRole('owne
       recipient: { id: c.psid }, messaging_type: 'RESPONSE', message: { text: c.draft_reply },
     }, { headers: { Authorization: `Bearer ${page.pageAccessToken}` }, timeout: 15000 });
     await supabase.from('handoff_cases').update({ status: 'sent' }).eq('id', c.id).eq('org_id', req.orgId);
+    await recordAuditLog({
+      orgId: req.orgId,
+      actorUserId: req.authUser.id,
+      actorRole: req.userRole,
+      action: 'handoff_case.send',
+      targetType: 'handoff_case',
+      targetId: c.id,
+      metadata: { page_id: page.pageId },
+    });
     return res.json({ success: true });
   } catch (err) {
     await supabase.from('handoff_cases').update({ status: 'approved' }).eq('id', c.id).eq('org_id', req.orgId);
@@ -1366,7 +1630,9 @@ if (require.main === module) {
 
 module.exports = {
   app,
+  dailyAiCount,
   purgeFacebookUserData,
+  recordAuditLog,
   resolvePageCredentialsForOrg,
   uploadImageToSupabase,
   verifyFacebookSignedRequest,
