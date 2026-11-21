@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/errors/api_exception.dart';
 import '../../core/errors/image_prepare_exception.dart';
 import '../../core/errors/user_message.dart';
 import '../../core/theme/app_theme.dart';
@@ -45,6 +46,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   File? _image;
   HandoffCase? _caseResult;
   String? _captureError;
+  String? _failedCaseId;
   String _filter = 'all';
   String? _selectedId;
   bool _busy = false;
@@ -136,31 +138,66 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     return ok ?? false;
   }
 
+  void _applyCaseResult(HandoffCase result) {
+    setState(() {
+      _caseResult = result;
+      _captureError = null;
+      _failedCaseId = null;
+      final rec = result.recommendedItemId;
+      if (result.faceDetected &&
+          rec != null &&
+          _catalog.any((e) => e.id == rec)) {
+        _selectedId = rec;
+      }
+    });
+  }
+
   Future<void> _capture(File file) async {
     setState(() {
       _image = file;
       _caseResult = null;
       _captureError = null;
+      _failedCaseId = null;
       _approved = false;
       _busy = true;
     });
     try {
       final result = await widget.handoffService.captureCase(file);
       if (!mounted) return;
-      setState(() {
-        _caseResult = result;
-        _captureError = null;
-        final rec = result.recommendedItemId;
-        if (result.faceDetected &&
-            rec != null &&
-            _catalog.any((e) => e.id == rec)) {
-          _selectedId = rec;
-        }
-      });
+      _applyCaseResult(result);
     } catch (error) {
       if (!mounted) return;
       final msg =
           error is ImagePrepareException ? error.message : userMessage(error);
+      final failedId = error is ApiException ? error.caseId : null;
+      setState(() {
+        _captureError = msg;
+        _failedCaseId = failedId;
+      });
+      showAppMessage(context, msg, isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _retryAnalysis() async {
+    if (_busy) return;
+    final existingId = _failedCaseId;
+    if (existingId == null || existingId.isEmpty) {
+      if (_image != null) await _capture(_image!);
+      return;
+    }
+    setState(() {
+      _captureError = null;
+      _busy = true;
+    });
+    try {
+      final result = await widget.handoffService.analyzeCase(existingId);
+      if (!mounted) return;
+      _applyCaseResult(result);
+    } catch (error) {
+      if (!mounted) return;
+      final msg = userMessage(error);
       setState(() => _captureError = msg);
       showAppMessage(context, msg, isError: true);
     } finally {
@@ -192,6 +229,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
         _image = null;
         _caseResult = null;
         _captureError = null;
+        _failedCaseId = null;
         _selectedId = null;
         _approved = false;
       });
@@ -360,7 +398,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
             ),
             const SizedBox(height: 10),
             OutlinedButton.icon(
-              onPressed: () => _capture(_image!),
+              onPressed: _retryAnalysis,
               icon: const Icon(Icons.refresh, size: 16),
               label: const Text('Thử phân tích lại'),
             ),

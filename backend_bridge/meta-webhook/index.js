@@ -1410,7 +1410,7 @@ app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner
       }));
       await supabase.from('handoff_cases').update({ status: 'failed' }).eq('id', row.id).eq('org_id', req.orgId);
       const status = err.code === 'AI_DAILY_CAP' ? 429 : (err.code === 'GEMINI_NOT_CONFIGURED' ? 503 : 502);
-      return res.status(status).json({ error: err.code || 'AI_FAILED' });
+      return res.status(status).json({ error: err.code || 'AI_FAILED', case_id: row.id });
     }
   }));
 

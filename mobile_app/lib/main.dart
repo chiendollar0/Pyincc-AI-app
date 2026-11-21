@@ -1135,6 +1135,7 @@ class _QuickBookingDialogState extends State<_QuickBookingDialog> {
   final TextEditingController _nameCtrl = TextEditingController();
   final TextEditingController _timeCtrl = TextEditingController(text: '17:30');
   final TextEditingController _serviceCtrl = TextEditingController();
+  String? _validationError;
 
   @override
   void dispose() {
@@ -1144,6 +1145,22 @@ class _QuickBookingDialogState extends State<_QuickBookingDialog> {
     super.dispose();
   }
 
+  void _submit() {
+    final customerName = _nameCtrl.text.trim();
+    final serviceName = _serviceCtrl.text.trim();
+    if (customerName.isEmpty || serviceName.isEmpty) {
+      setState(() {
+        _validationError = 'Vui lòng nhập đầy đủ tên khách hàng và dịch vụ.';
+      });
+      return;
+    }
+    Navigator.of(context).pop((
+      time: _timeCtrl.text.trim(),
+      customerName: customerName,
+      serviceName: serviceName,
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -1151,6 +1168,7 @@ class _QuickBookingDialogState extends State<_QuickBookingDialog> {
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             TextField(
               controller: _timeCtrl,
@@ -1161,6 +1179,11 @@ class _QuickBookingDialogState extends State<_QuickBookingDialog> {
             const SizedBox(height: 10),
             TextField(
               controller: _nameCtrl,
+              onChanged: (_) {
+                if (_validationError != null) {
+                  setState(() => _validationError = null);
+                }
+              },
               decoration: const InputDecoration(
                 labelText: 'Tên & SĐT khách hàng',
               ),
@@ -1168,11 +1191,26 @@ class _QuickBookingDialogState extends State<_QuickBookingDialog> {
             const SizedBox(height: 10),
             TextField(
               controller: _serviceCtrl,
+              onChanged: (_) {
+                if (_validationError != null) {
+                  setState(() => _validationError = null);
+                }
+              },
               decoration: const InputDecoration(
                 labelText: 'Dịch vụ',
                 hintText: 'Nhập tên dịch vụ của tiệm',
               ),
             ),
+            if (_validationError != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _validationError!,
+                style: const TextStyle(
+                  color: AppColors.danger,
+                  fontSize: 12,
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -1182,11 +1220,7 @@ class _QuickBookingDialogState extends State<_QuickBookingDialog> {
           child: const Text('Hủy'),
         ),
         FilledButton(
-          onPressed: () => Navigator.of(context).pop((
-            time: _timeCtrl.text.trim(),
-            customerName: _nameCtrl.text.trim(),
-            serviceName: _serviceCtrl.text.trim(),
-          )),
+          onPressed: _submit,
           child: const Text('Lưu lịch hẹn'),
         ),
       ],
