@@ -849,12 +849,12 @@ app.get('/connection/status', requireAuth, requireRole('owner'), asyncHandler(as
   if (!lastWebhookAt && pageIds.size > 0) {
     try {
       const { data: recentEvents } = await supabase.from('webhook_events')
-        .select('received_at, raw_payload')
+        .select('received_at')
+        .in('raw_payload->>pageId', Array.from(pageIds))
         .order('received_at', { ascending: false })
-        .limit(30);
-      if (Array.isArray(recentEvents)) {
-        const matched = recentEvents.find((ev) => pageIds.has(String(ev.raw_payload?.pageId || '')));
-        if (matched?.received_at) lastWebhookAt = matched.received_at;
+        .limit(1);
+      if (Array.isArray(recentEvents) && recentEvents[0]?.received_at) {
+        lastWebhookAt = recentEvents[0].received_at;
       }
     } catch (_) {
       // Keep lastWebhookAt null if diagnostics table is unavailable

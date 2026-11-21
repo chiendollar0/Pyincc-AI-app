@@ -208,7 +208,12 @@ function createMockEnv() {
       },
       in(col, list) {
         const set = new Set(list.map(String));
-        filters.push((r) => set.has(String(r[col] ?? '')));
+        if (col.includes('->>')) {
+          const [jsonCol, key] = col.split('->>');
+          filters.push((r) => set.has(String(r[jsonCol]?.[key] ?? '')));
+        } else {
+          filters.push((r) => set.has(String(r[col] ?? '')));
+        }
         return q;
       },
       order(col, opts = {}) {
@@ -969,6 +974,25 @@ test('UI v2 endpoints: /tenant, /ai-usage, /connection/status (honest nulls), an
   assert.equal(conn.body.handover_subscribed, null);
   assert.equal(conn.body.receiving_events, false);
   assert.equal(conn.body.last_webhook_at, null);
+
+  // Even when 40 newer webhook events belong to another page, tenant's own event within 24h is found
+  const ownEventTime = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+  state.tables.webhook_events = [
+    ...Array.from({ length: 40 }, (_, i) => ({
+      id: `other-ev-${i}`,
+      received_at: new Date(Date.now() - (i + 1) * 1000).toISOString(),
+      raw_payload: { pageId: 'other-page-999' },
+    })),
+    {
+      id: 'own-ev-1',
+      received_at: ownEventTime,
+      raw_payload: { pageId: 'page-test-1' },
+    },
+  ];
+  const conn2 = await invoke('GET', '/connection/status', { token: tokens.ownerToken });
+  assert.equal(conn2.statusCode, 200);
+  assert.equal(conn2.body.receiving_events, true);
+  assert.equal(conn2.body.last_webhook_at, ownEventTime);
 
   // POST /catalog with group_label (no price) + PUT toggle active: false
   const created = await invoke('POST', '/catalog', {
