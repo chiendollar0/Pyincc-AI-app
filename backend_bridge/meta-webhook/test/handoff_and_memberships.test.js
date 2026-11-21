@@ -938,3 +938,54 @@ test('7-day booking reminders & case release: filters due follow-ups past 200 ol
   assert.equal(rejFailed.body.status, 'rejected');
 });
 
+test('UI v2 endpoints: /tenant, /ai-usage, /connection/status (honest nulls), and /catalog group_label + active toggle', async () => {
+  const { state, invoke, tokens } = createMockEnv();
+
+  // GET & PUT /tenant
+  const t1 = await invoke('GET', '/tenant', { token: tokens.ownerToken });
+  assert.equal(t1.statusCode, 200);
+  assert.equal(t1.body.name, 'PYINCC Test Salon');
+
+  const t2 = await invoke('PUT', '/tenant', {
+    token: tokens.ownerToken,
+    body: { name: 'PYINCC Beauty Studio', specialty: 'Phun môi, sửa mày trổ' },
+  });
+  assert.equal(t2.statusCode, 200);
+  assert.equal(t2.body.name, 'PYINCC Beauty Studio');
+  assert.equal(t2.body.specialty, 'Phun môi, sửa mày trổ');
+
+  // GET /ai-usage
+  const usage = await invoke('GET', '/ai-usage', { token: tokens.ownerToken });
+  assert.equal(usage.statusCode, 200);
+  assert.equal(usage.body.used, 0);
+  assert.equal(usage.body.cap, 50);
+
+  // GET /connection/status: must return null for unverifiable Business Suite flags
+  const conn = await invoke('GET', '/connection/status', { token: tokens.ownerToken });
+  assert.equal(conn.statusCode, 200);
+  assert.equal(conn.body.pages.length, 1);
+  assert.equal(conn.body.default_app, null);
+  assert.equal(conn.body.take_control_enabled, null);
+  assert.equal(conn.body.handover_subscribed, null);
+  assert.equal(conn.body.receiving_events, false);
+  assert.equal(conn.body.last_webhook_at, null);
+
+  // POST /catalog with group_label (no price) + PUT toggle active: false
+  const created = await invoke('POST', '/catalog', {
+    token: tokens.ownerToken,
+    body: { name: 'Mày sợi tự nhiên', group_label: 'Chân mày', description: 'Tự nhiên' },
+  });
+  assert.equal(created.statusCode, 201);
+  assert.equal(created.body.item.category, 'eyebrow');
+  assert.equal(created.body.item.group_label, 'Chân mày');
+  assert.equal(created.body.item.active, true);
+  assert.equal('price' in created.body.item, false);
+
+  const toggled = await invoke('PUT', `/catalog/${created.body.item.id}`, {
+    token: tokens.ownerToken,
+    body: { active: false },
+  });
+  assert.equal(toggled.statusCode, 200);
+  assert.equal(toggled.body.item.active, false);
+});
+
