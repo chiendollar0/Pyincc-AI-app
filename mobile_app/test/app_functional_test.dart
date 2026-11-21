@@ -60,7 +60,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.text('Vui lòng nhập đầy đủ email và mật khẩu.'),
+        find.text('Vui lòng nhập đầy đủ Email và Mật khẩu.'),
         findsOneWidget,
       );
       expect(find.textContaining('API Key'), findsNothing);
@@ -93,7 +93,7 @@ void main() {
       expect(find.text('Thanh Trúc (Zalo)'), findsNothing);
 
       // Tab 1: Studio (no default catalog, demo button disabled)
-      await tester.tap(find.text('Studio'));
+      await tester.tap(find.text('Studio').last);
       await tester.pumpAndSettle();
       expect(find.text('Chưa có ảnh khách'), findsOneWidget);
       expect(
@@ -103,7 +103,7 @@ void main() {
       expect(find.text('Tạo ảnh demo (chờ model)'), findsOneWidget);
 
       // Tab 2: Lịch (empty state + open/close AddBookingDialog safely)
-      await tester.tap(find.text('Lịch'));
+      await tester.tap(find.text('Lịch').last);
       await tester.pumpAndSettle();
       expect(find.text('Hẹn trong ngày (0)'), findsOneWidget);
       expect(find.text('Chưa có khách đến mốc 7 ngày.'), findsOneWidget);
@@ -116,12 +116,11 @@ void main() {
       expect(find.text('Thêm lịch hẹn'), findsNothing);
 
       // Tab 3: Cài đặt (4 groups, no staff, honest connection checklist, crash-safe dialogs)
-      await tester.tap(find.text('Cài đặt'));
+      await tester.tap(find.text('Cài đặt').last);
       await tester.pumpAndSettle();
       expect(find.text('Tiệm'), findsOneWidget);
       expect(find.text('Kết nối'), findsOneWidget);
       expect(find.text('Hệ thống'), findsOneWidget);
-      expect(find.text('Tài khoản'), findsOneWidget);
       expect(find.text('Đã dùng 2 / 50 lượt'), findsOneWidget);
       expect(find.textContaining('Nhân viên'), findsNothing);
 
@@ -130,7 +129,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Chưa kết nối Fanpage nào.'), findsOneWidget);
       expect(find.text('Chưa kiểm tra'), findsNWidgets(4));
-      await tester.tap(find.byType(BackButton));
+      await tester.pageBack();
       await tester.pumpAndSettle();
 
       // Open CatalogScreen and open/close _AddCatalogItemDialog cleanly
@@ -143,10 +142,17 @@ void main() {
       await tester.tap(find.text('Hủy'));
       await tester.pumpAndSettle();
       expect(find.text('Tên mẫu'), findsNothing);
-      await tester.tap(find.byType(BackButton));
+      await tester.pageBack();
       await tester.pumpAndSettle();
 
-      // Sign out returns to LoginScreen
+      // Scroll to Tài khoản section and verify sign out returns to LoginScreen
+      await tester.scrollUntilVisible(
+        find.text('Đăng xuất'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Tài khoản'), findsOneWidget);
       await tester.tap(find.text('Đăng xuất'));
       await tester.pumpAndSettle();
       expect(find.text('Email đăng nhập'), findsOneWidget);
