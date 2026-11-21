@@ -1,5 +1,6 @@
 // ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'core/errors/user_message.dart';
 import 'core/theme/app_theme.dart';
@@ -795,6 +796,64 @@ class _SalonOperationsHubScreenState extends State<SalonOperationsHubScreen> {
                   ),
                 ],
               ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 8,
+              ),
+              leading: CircleAvatar(
+                backgroundColor: AppColors.primary.withValues(alpha: 0.12),
+                child: const Icon(
+                  Icons.copy_all_outlined,
+                  color: AppColors.primary,
+                ),
+              ),
+              title: const Text(
+                'Sao chép Prompt Business AI',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+              subtitle: const Text(
+                'Dán vào Meta Business Suite để Business AI tự CSKH và chuyển ca khó về ứng dụng.',
+                style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+              ),
+              trailing: const Icon(Icons.copy),
+              onTap: () async {
+                const businessAiPrompt =
+                    'Bạn là trợ lý CSKH của [TÊN TIỆM].\n\n'
+                    '1. PHẠM VI\n'
+                    'Chỉ trả lời về: giá dịch vụ, giờ làm việc, địa chỉ, cách đặt lịch theo thông tin trong "Câu hỏi thường gặp".\n'
+                    'Giọng điệu lịch sự, xưng "Dạ - Em - Chị/Anh", ngắn gọn, tối đa 1 emoji.\n\n'
+                    '2. ĐẶT LỊCH\n'
+                    'Hỏi lần lượt: Tên, Số điện thoại, Dịch vụ, Ngày giờ mong muốn.\n'
+                    'Xác nhận lại một lần, rồi báo: "Em đã ghi nhận, tiệm sẽ gọi xác nhận lại cho chị ạ."\n\n'
+                    '3. CHUYỂN CA (QUAN TRỌNG)\n'
+                    'Áp dụng khi khách:\n'
+                    '- xin xem mẫu hình ảnh trước/sau\n'
+                    '- gửi ảnh mặt mộc để tư vấn\n'
+                    '- có ca khó: trổ xanh, sửa mày, dị ứng, đau, khiếu nại, biến chứng\n\n'
+                    'Thực hiện đúng 3 bước:\n'
+                    'Bước 1: Không tự tư vấn, không chẩn đoán, không hứa kết quả.\n'
+                    'Bước 2: Gửi đúng 1 câu: "Dạ ca này để chuyên viên xem kỹ hơn cho chính xác ạ. Chị chờ em một chút nhé."\n'
+                    'Bước 3: Chuyển hội thoại sang ứng dụng quản lý (Handover). Sau đó không trả lời thêm.\n\n'
+                    '4. DẤU HIỆU NGUY HIỂM\n'
+                    'Nếu khách mô tả sưng nhiều, chảy mủ, sốt, khó thở, hoặc đau dữ dội sau khi làm:\n'
+                    '"Dạ chị vui lòng liên hệ ngay hotline [SỐ HOTLINE] hoặc đến cơ sở gần nhất để được kiểm tra sớm ạ."\n'
+                    'Sau đó vẫn chuyển ca theo bước 3.\n\n'
+                    '5. NGOÀI PHẠM VI\n'
+                    'Với câu hỏi khác: "Dạ vấn đề này em xin phép để chuyên viên tư vấn trực tiếp cho chị được đầy đủ hơn ạ." Rồi chuyển ca theo bước 3.';
+                await Clipboard.setData(
+                  const ClipboardData(text: businessAiPrompt),
+                );
+                if (!mounted) return;
+                showAppMessage(
+                  context,
+                  'Đã sao chép Prompt Business AI. Dán vào Meta Business Suite và điền tên tiệm + hotline.',
+                );
+              },
             ),
           ),
           const SizedBox(height: 12),

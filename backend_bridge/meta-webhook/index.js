@@ -158,6 +158,21 @@ async function resolveOrActivateMembership(user) {
   return null;
 }
 
+async function requireSupabaseUser(req, res, next) {
+  if (!supabase) return res.status(503).json({ error: 'Service Unavailable' });
+  const match = /^Bearer\s+(.+)$/i.exec((req.get('authorization') || '').trim());
+  const token = match ? match[1].trim() : '';
+  if (!token || !hasValidJwtFormat(token)) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data?.user) return res.status(401).json({ error: 'Unauthorized' });
+    req.authUser = data.user;
+    return next();
+  } catch {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+}
+
 async function requireAuth(req, res, next) {
   if (!supabase) return res.status(503).json({ error: 'Service Unavailable' });
   const match = /^Bearer\s+(.+)$/i.exec((req.get('authorization') || '').trim());
@@ -723,6 +738,125 @@ app.put('/settings', writeLimiter, requireAuth, requireRole('owner', 'staff'), e
   return res.json({ success: true, onDuty });
 }));
 
+app.post('/onboarding/claim', authWriteLimiter, requireSupabaseUser, express.json({ limit: '8kb' }), asyncHandler(async (req, res) => {
+  const email = typeof req.authUser?.email === 'string' ? req.authUser.email.trim().toLowerCase() : '';
+  if (!email || !req.authUser?.email_confirmed_at) {
+    return res.status(403).json({ error: 'EMAIL_NOT_CONFIRMED' });
+  }
+  const code = String(req.body?.code || '').trim().toUpperCase();
+  if (!code || code.length > 64) return res.status(400).json({ error: 'ONBOARDING_CODE_REQUIRED' });
+
+  const { data: existingMem } = await supabase.from('memberships')
+    .select('id, org_id, role, status').eq('user_id', req.authUser.id).eq('status', 'active').maybeSingle();
+  if (existingMem?.org_id) {
+    return res.status(409).json({ error: 'ALREADY_HAS_ORGANIZATION', org_id: existingMem.org_id });
+  }
+
+  const { data: codeRow } = await supabase.from('onboarding_codes')
+    .select('code, org_name, org_id, claimed_by').eq('code', code).maybeSingle();
+  if (!codeRow) return res.status(404).json({ error: 'INVALID_ONBOARDING_CODE' });
+  if (codeRow.claimed_by) return res.status(409).json({ error: 'ONBOARDING_CODE_ALREADY_USED' });
+
+  let orgId = codeRow.org_id;
+  if (!orgId) {
+    const { data: newOrg, error: orgErr } = await supabase.from('organizations')
+      .insert({ name: String(codeRow.org_name || 'PYINCC Salon').trim() })
+      .select('id').single();
+    if (orgErr || !newOrg?.id) return res.status(500).json({ error: 'ORG_CREATE_FAILED' });
+    orgId = newOrg.id;
+  }
+
+  const { data: claimed } = await supabase.from('onboarding_codes')
+    .update({ org_id: orgId, claimed_by: req.authUser.id, claimed_at: new Date().toISOString() })
+    .eq('code', code)
+    .is('claimed_by', null)
+    .select('code, org_id, org_name')
+    .maybeSingle();
+  if (!claimed) return res.status(409).json({ error: 'ONBOARDING_CODE_ALREADY_USED' });
+
+  const { data: membership, error: memErr } = await supabase.from('memberships')
+    .insert({
+      org_id: orgId,
+      user_id: req.authUser.id,
+      invited_email: email,
+      role: 'owner',
+      status: 'active',
+    })
+    .select('id, org_id, role, status')
+    .single();
+  if (memErr || !membership) return res.status(500).json({ error: 'MEMBERSHIP_CREATE_FAILED' });
+
+  await recordAuditLog({
+    orgId,
+    actorUserId: req.authUser.id,
+    actorRole: 'owner',
+    action: 'onboarding.claim',
+    targetType: 'organization',
+    targetId: orgId,
+    metadata: { code },
+  });
+  return res.json({ success: true, org_id: orgId, org_name: claimed.org_name, role: 'owner' });
+}));
+
+app.get('/catalog', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+  const { data, error } = await supabase.from('catalog_items')
+    .select('id, category, name, description, image_url, updated_at')
+    .eq('org_id', req.orgId)
+    .order('name', { ascending: true });
+  if (error) return res.status(500).json({ error: 'Failed to load catalog' });
+  return res.json({ items: data || [] });
+}));
+
+app.post('/catalog', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const category = String(req.body?.category || 'other').trim().toLowerCase();
+  const description = typeof req.body?.description === 'string' ? req.body.description.trim() : null;
+  const imageUrl = typeof req.body?.image_url === 'string' ? req.body.image_url.trim() || null : null;
+  if (!name || name.length > 160) return res.status(400).json({ error: 'CATALOG_NAME_INVALID' });
+  if (!['eyebrow', 'lip', 'other'].includes(category)) return res.status(400).json({ error: 'CATALOG_CATEGORY_INVALID' });
+  const { data, error } = await supabase.from('catalog_items')
+    .insert({
+      org_id: req.orgId,
+      category,
+      name,
+      description,
+      image_url: imageUrl,
+      updated_at: new Date().toISOString(),
+    })
+    .select('id, category, name, description, image_url, updated_at')
+    .single();
+  if (error || !data) return res.status(500).json({ error: 'Failed to create catalog item' });
+  return res.status(201).json({ success: true, item: data });
+}));
+
+app.put('/catalog/:id', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const category = String(req.body?.category || 'other').trim().toLowerCase();
+  const description = typeof req.body?.description === 'string' ? req.body.description.trim() : null;
+  const imageUrl = typeof req.body?.image_url === 'string' ? req.body.image_url.trim() || null : null;
+  if (!name || name.length > 160) return res.status(400).json({ error: 'CATALOG_NAME_INVALID' });
+  if (!['eyebrow', 'lip', 'other'].includes(category)) return res.status(400).json({ error: 'CATALOG_CATEGORY_INVALID' });
+  const { data, error } = await supabase.from('catalog_items')
+    .update({ category, name, description, image_url: imageUrl, updated_at: new Date().toISOString() })
+    .eq('id', req.params.id)
+    .eq('org_id', req.orgId)
+    .select('id, category, name, description, image_url, updated_at')
+    .maybeSingle();
+  if (error || !data) return res.status(404).json({ error: 'CATALOG_ITEM_NOT_FOUND' });
+  return res.json({ success: true, item: data });
+}));
+
+app.delete('/catalog/:id', writeLimiter, requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
+  const { data, error } = await supabase.from('catalog_items')
+    .delete()
+    .eq('id', req.params.id)
+    .eq('org_id', req.orgId)
+    .select('id')
+    .maybeSingle();
+  if (error || !data) return res.status(404).json({ error: 'CATALOG_ITEM_NOT_FOUND' });
+  return res.json({ success: true, id: data.id });
+}));
+
 app.get('/bookings', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from('bookings').select('*').eq('org_id', req.orgId)
     .order('scheduled_at', { ascending: true }).limit(50);
@@ -769,15 +903,68 @@ app.post('/bookings', writeLimiter, requireAuth, requireRole('owner', 'staff'), 
     return res.status(409).json({ error: 'BOOKING_SLOT_CONFLICT' });
   }
 
+  const serviceDateRaw = String(req.body?.serviceDate || req.body?.service_date || '').trim();
+  const serviceDate = /^\d{4}-\d{2}-\d{2}$/.test(serviceDateRaw) ? serviceDateRaw : null;
+  const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim().slice(0, 500) || null : null;
+
   const { data, error } = await supabase.from('bookings').insert({ org_id: req.orgId,
     customer_name: customerName, customer_phone: customerPhone, service_name: serviceName,
-    scheduled_at: scheduledIso, status: 'confirmed' }).select('*').single();
+    scheduled_at: scheduledIso, service_date: serviceDate, notes, status: 'confirmed' }).select('*').single();
   if (error) {
     if (error.code === '23505') {
       return res.status(409).json({ error: 'BOOKING_SLOT_CONFLICT' });
     }
     return res.status(500).json({ error: 'Failed to create booking' });
   }
+  return res.json({ success: true, booking: data });
+}));
+
+function vnDateString(dateObj = new Date()) {
+  const vn = new Date(dateObj.getTime() + 7 * 3600 * 1000);
+  const y = vn.getUTCFullYear();
+  const m = String(vn.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(vn.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+app.get('/bookings/reminders', requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+  const { data, error } = await supabase.from('bookings')
+    .select('id, customer_name, customer_phone, service_name, scheduled_at, service_date, followup_done, notes, status')
+    .eq('org_id', req.orgId)
+    .neq('status', 'cancelled')
+    .order('scheduled_at', { ascending: true })
+    .limit(200);
+  if (error) return res.status(500).json({ error: 'Failed to load booking reminders' });
+
+  const todayStr = vnDateString(new Date());
+  const sevenDaysAgoStr = vnDateString(new Date(Date.now() - 7 * 24 * 3600 * 1000));
+  const rows = Array.isArray(data) ? data : [];
+  const today = rows.filter((b) => {
+    const day = b.service_date || (b.scheduled_at ? vnDateString(new Date(b.scheduled_at)) : null);
+    return day === todayStr;
+  });
+  const dueFollowups = rows.filter((b) => {
+    if (b.followup_done) return false;
+    const day = b.service_date || (b.scheduled_at ? vnDateString(new Date(b.scheduled_at)) : null);
+    return Boolean(day && day <= sevenDaysAgoStr);
+  });
+  return res.json({
+    date: todayStr,
+    followupCutoffDate: sevenDaysAgoStr,
+    today,
+    dueFollowups,
+  });
+}));
+
+app.patch('/bookings/:id/followup', writeLimiter, requireAuth, requireRole('owner', 'staff'), express.json({ limit: '4kb' }), asyncHandler(async (req, res) => {
+  const done = typeof req.body?.done === 'boolean' ? req.body.done : true;
+  const { data, error } = await supabase.from('bookings')
+    .update({ followup_done: done })
+    .eq('id', req.params.id)
+    .eq('org_id', req.orgId)
+    .select('id, followup_done')
+    .maybeSingle();
+  if (error || !data) return res.status(404).json({ error: 'BOOKING_NOT_FOUND' });
   return res.json({ success: true, booking: data });
 }));
 
@@ -1319,6 +1506,45 @@ app.post('/handoff-cases/:id/send', writeLimiter, requireAuth, requireRole('owne
     const mapped = mapMetaSendError(err);
     return res.status(mapped.status).json(mapped.body);
   }
+}));
+
+app.post('/handoff-cases/:id/release', writeLimiter, requireAuth, requireRole('owner', 'staff'), asyncHandler(async (req, res) => {
+  const { data: c } = await supabase.from('handoff_cases')
+    .select('id, org_id, page_id, psid')
+    .eq('id', req.params.id)
+    .eq('org_id', req.orgId)
+    .maybeSingle();
+  if (!c) return res.status(404).json({ error: 'NOT_FOUND' });
+  if (!c.psid || !c.page_id) return res.status(422).json({ error: 'NO_RECIPIENT' });
+
+  const page = await resolvePageCredentialsForOrg(req.orgId, c.page_id);
+  if (!page) return res.status(503).json({ error: 'NO_PAGE' });
+
+  try {
+    await axios.post(`https://graph.facebook.com/${config.graphApiVersion}/${page.pageId}/release_thread_control`, {
+      recipient: { id: c.psid },
+    }, { headers: { Authorization: `Bearer ${page.pageAccessToken}` }, timeout: 15000 });
+  } catch (err) {
+    console.error(JSON.stringify({ event: 'release_thread_control_failed', status: err.response?.status, message: err.message }));
+    return res.status(502).json({ error: 'META_RELEASE_FAILED' });
+  }
+
+  await supabase.from('handover_threads')
+    .update({ active: false, updated_at: new Date().toISOString() })
+    .eq('org_id', req.orgId)
+    .eq('page_id', c.page_id)
+    .eq('psid', c.psid);
+
+  await recordAuditLog({
+    orgId: req.orgId,
+    actorUserId: req.authUser.id,
+    actorRole: req.userRole,
+    action: 'handoff_case.release',
+    targetType: 'handoff_case',
+    targetId: c.id,
+    metadata: { page_id: page.pageId },
+  });
+  return res.json({ success: true, released: true });
 }));
 
 app.get('/webhook', (req, res) => {
