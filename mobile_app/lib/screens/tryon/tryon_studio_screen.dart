@@ -44,6 +44,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   List<_Item> _catalog = const <_Item>[];
   File? _image;
   HandoffCase? _caseResult;
+  String? _captureError;
   String _filter = 'all';
   String? _selectedId;
   bool _busy = false;
@@ -139,6 +140,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
     setState(() {
       _image = file;
       _caseResult = null;
+      _captureError = null;
       _approved = false;
       _busy = true;
     });
@@ -147,6 +149,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
       if (!mounted) return;
       setState(() {
         _caseResult = result;
+        _captureError = null;
         final rec = result.recommendedItemId;
         if (result.faceDetected &&
             rec != null &&
@@ -158,6 +161,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
       if (!mounted) return;
       final msg =
           error is ImagePrepareException ? error.message : userMessage(error);
+      setState(() => _captureError = msg);
       showAppMessage(context, msg, isError: true);
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -187,6 +191,7 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
   void _reset() => setState(() {
         _image = null;
         _caseResult = null;
+        _captureError = null;
         _selectedId = null;
         _approved = false;
       });
@@ -326,9 +331,44 @@ class _TryOnStudioScreenState extends State<TryOnStudioScreen> {
 
   Widget _resultCard(HandoffCase? c) {
     if (_image == null) return const SizedBox.shrink();
-    if (c == null) {
-      return const _Card(child: Text('Đang phân tích ca tư vấn...'));
+    if (_busy) {
+      return const _Card(
+        child: Row(
+          children: [
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 10),
+            Expanded(child: Text('Đang phân tích ca tư vấn...')),
+          ],
+        ),
+      );
     }
+    if (_captureError != null) {
+      return _Card(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _captureError!,
+              style: const TextStyle(
+                color: AppColors.danger,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: () => _capture(_image!),
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('Thử phân tích lại'),
+            ),
+          ],
+        ),
+      );
+    }
+    if (c == null) return const SizedBox.shrink();
     if (!c.faceDetected) {
       return const _Card(
         child: Text(

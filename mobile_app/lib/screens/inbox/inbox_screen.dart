@@ -211,40 +211,10 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   Future<String?> _editDraftDialog(HandoffCase item) {
-    final controller = TextEditingController(text: item.draftReply);
     return showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Duyệt nội dung trả lời'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Kiểm tra và chỉnh sửa nội dung trước khi duyệt. Sau khi duyệt bạn mới bấm Gửi.',
-              style: TextStyle(fontSize: 13, color: AppColors.textMuted),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: controller,
-              maxLines: 6,
-              maxLength: 2000,
-              decoration: const InputDecoration(labelText: 'Nội dung trả lời'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Hủy'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-            child: const Text('Xác nhận duyệt'),
-          ),
-        ],
-      ),
-    ).whenComplete(controller.dispose);
+      builder: (_) => _EditDraftDialog(initialText: item.draftReply),
+    );
   }
 
   @override
@@ -788,6 +758,61 @@ class _StateView extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _EditDraftDialog extends StatefulWidget {
+  const _EditDraftDialog({required this.initialText});
+
+  final String initialText;
+
+  @override
+  State<_EditDraftDialog> createState() => _EditDraftDialogState();
+}
+
+class _EditDraftDialogState extends State<_EditDraftDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialText,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Duyệt nội dung trả lời'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Kiểm tra và chỉnh sửa nội dung trước khi duyệt. Sau khi duyệt bạn mới bấm Gửi.',
+            style: TextStyle(fontSize: 13, color: AppColors.textMuted),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _controller,
+            maxLines: 6,
+            maxLength: 2000,
+            decoration: const InputDecoration(labelText: 'Nội dung trả lời'),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Hủy'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
+          child: const Text('Xác nhận duyệt'),
+        ),
+      ],
     );
   }
 }

@@ -56,83 +56,16 @@ class _CatalogManagementScreenState extends State<CatalogManagementScreen> {
   }
 
   Future<void> _openEditor({CatalogItem? existing}) async {
-    final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    final descCtrl = TextEditingController(text: existing?.description ?? '');
-    String category = existing?.category ?? 'eyebrow';
-
-    final saved = await showDialog<bool>(
+    final result = await showDialog<
+        ({String name, String category, String description})>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: Text(existing == null ? 'Thêm dịch vụ mới' : 'Sửa dịch vụ'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Danh mục nội bộ dùng cho AI gợi ý dáng phù hợp (không lưu giá trong app; giá do Business AI tư vấn).',
-                  style: TextStyle(fontSize: 12, color: AppColors.textMuted),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Tên dịch vụ / mẫu',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Nhóm dịch vụ',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    for (final c in const [
-                      ('eyebrow', 'Chân mày'),
-                      ('lip', 'Môi'),
-                      ('other', 'Khác'),
-                    ])
-                      ChoiceChip(
-                        label: Text(c.$2),
-                        selected: category == c.$1,
-                        onSelected: (_) =>
-                            setDialogState(() => category = c.$1),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: descCtrl,
-                  maxLines: 3,
-                  decoration: const InputDecoration(
-                    labelText: 'Mô tả ngắn (không ghi giá)',
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Hủy'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: Text(existing == null ? 'Thêm' : 'Lưu'),
-            ),
-          ],
-        ),
-      ),
+      builder: (_) => _CatalogItemDialog(existing: existing),
     );
+    if (result == null || result.name.isEmpty) return;
 
-    final name = nameCtrl.text.trim();
-    final desc = descCtrl.text.trim();
-    nameCtrl.dispose();
-    descCtrl.dispose();
-    if (saved != true || name.isEmpty) return;
+    final name = result.name;
+    final category = result.category;
+    final desc = result.description;
 
     try {
       if (existing == null) {
@@ -321,6 +254,101 @@ class _CatalogManagementScreenState extends State<CatalogManagementScreen> {
           );
         },
       ),
+    );
+  }
+}
+
+class _CatalogItemDialog extends StatefulWidget {
+  const _CatalogItemDialog({this.existing});
+
+  final CatalogItem? existing;
+
+  @override
+  State<_CatalogItemDialog> createState() => _CatalogItemDialogState();
+}
+
+class _CatalogItemDialogState extends State<_CatalogItemDialog> {
+  late final TextEditingController _nameCtrl = TextEditingController(
+    text: widget.existing?.name ?? '',
+  );
+  late final TextEditingController _descCtrl = TextEditingController(
+    text: widget.existing?.description ?? '',
+  );
+  late String _category = widget.existing?.category ?? 'eyebrow';
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _descCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.existing == null ? 'Thêm dịch vụ mới' : 'Sửa dịch vụ'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Danh mục nội bộ dùng cho AI gợi ý dáng phù hợp (không lưu giá trong app; giá do Business AI tư vấn).',
+              style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _nameCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Tên dịch vụ / mẫu',
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Nhóm dịch vụ',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final c in const [
+                  ('eyebrow', 'Chân mày'),
+                  ('lip', 'Môi'),
+                  ('other', 'Khác'),
+                ])
+                  ChoiceChip(
+                    label: Text(c.$2),
+                    selected: _category == c.$1,
+                    onSelected: (_) => setState(() => _category = c.$1),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _descCtrl,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Mô tả ngắn (không ghi giá)',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Hủy'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop((
+            name: _nameCtrl.text.trim(),
+            category: _category,
+            description: _descCtrl.text.trim(),
+          )),
+          child: Text(widget.existing == null ? 'Thêm' : 'Lưu'),
+        ),
+      ],
     );
   }
 }
