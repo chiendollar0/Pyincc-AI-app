@@ -328,6 +328,11 @@ void main() {
       expect(repo.markedFollowupIds, ['bk-7d-1']);
       expect(find.text('Chưa có khách đến mốc 7 ngày.'), findsOneWidget);
 
+      // Dismiss confirmation SnackBar before tapping bottom-right FAB
+      ScaffoldMessenger.of(tester.element(find.text('Thêm lịch')))
+          .hideCurrentSnackBar();
+      await tester.pumpAndSettle();
+
       await tester.tap(find.text('Thêm lịch'));
       await tester.pumpAndSettle();
       expect(find.text('Thêm lịch hẹn'), findsOneWidget);
