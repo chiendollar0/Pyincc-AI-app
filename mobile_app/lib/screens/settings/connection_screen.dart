@@ -1,10 +1,40 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/errors/user_message.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/ui/widgets.dart';
 import '../../data/crm_repo.dart';
 import '../../services/facebook_connect_service.dart';
+
+const _businessAiPrompt = '''Bạn là trợ lý CSKH của [TÊN TIỆM].
+
+1. PHẠM VI
+Chỉ trả lời về: giá dịch vụ, giờ làm việc, địa chỉ, cách đặt lịch theo thông tin trong "Câu hỏi thường gặp".
+Giọng điệu lịch sự, xưng "Dạ - Em - Chị/Anh", ngắn gọn, tối đa 1 emoji.
+
+2. ĐẶT LỊCH
+Hỏi lần lượt: Tên, Số điện thoại, Dịch vụ, Ngày giờ mong muốn.
+Xác nhận lại một lần, rồi báo: "Em đã ghi nhận, tiệm sẽ gọi xác nhận lại cho chị ạ."
+
+3. CHUYỂN CA (QUAN TRỌNG)
+Áp dụng khi khách:
+- xin xem mẫu hình ảnh trước/sau
+- gửi ảnh mặt mộc để tư vấn
+- có ca khó: trổ xanh, sửa mày, dị ứng, đau, khiếu nại, biến chứng
+
+Thực hiện đúng 3 bước:
+Bước 1: Không tự tư vấn, không chẩn đoán, không hứa kết quả.
+Bước 2: Gửi đúng 1 câu: "Dạ ca này để chuyên viên xem kỹ hơn cho chính xác ạ. Chị chờ em một chút nhé."
+Bước 3: Chuyển hội thoại sang ứng dụng quản lý (Handover). Sau đó không trả lời thêm.
+
+4. DẤU HIỆU NGUY HIỂM
+Nếu khách mô tả sưng nhiều, chảy mủ, sốt, khó thở, hoặc đau dữ dội sau khi làm:
+"Dạ chị vui lòng liên hệ ngay hotline [SỐ HOTLINE] hoặc đến cơ sở gần nhất để được kiểm tra sớm ạ."
+Sau đó vẫn chuyển ca theo bước 3.
+
+5. NGOÀI PHẠM VI
+Với câu hỏi khác: "Dạ vấn đề này em xin phép để chuyên viên tư vấn trực tiếp cho chị được đầy đủ hơn ạ." Rồi chuyển ca theo bước 3.''';
 
 const _checks = <(String, String, String)>[
   (
@@ -42,6 +72,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   Map<String, dynamic> _status = {};
   bool _loading = true;
   bool _connecting = false;
+  String? _disconnectingPageId;
   String? _error;
 
   @override
@@ -77,6 +108,49 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     } finally {
       if (mounted) setState(() => _connecting = false);
     }
+  }
+
+  Future<void> _confirmDisconnect(String pageId, String pageName) async {
+    if (pageId.isEmpty || _disconnectingPageId != null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Gỡ liên kết Fanpage?'),
+        content: Text(
+          'Page Token của "${pageName.isEmpty ? pageId : pageName}" sẽ bị xóa khỏi hệ thống. '
+          'Bạn có thể kết nối lại bất cứ lúc nào.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Gỡ liên kết'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _disconnectingPageId = pageId);
+    try {
+      await widget.repo.disconnectPage(pageId);
+      if (!mounted) return;
+      showAppMessage(context, 'Đã gỡ liên kết Fanpage.');
+      await _load();
+    } catch (e) {
+      if (mounted) showAppMessage(context, userMessage(e), isError: true);
+    } finally {
+      if (mounted) setState(() => _disconnectingPageId = null);
+    }
+  }
+
+  Future<void> _copyPrompt() async {
+    await Clipboard.setData(const ClipboardData(text: _businessAiPrompt));
+    if (!mounted) return;
+    showAppMessage(context, 'Đã sao chép Prompt Business AI.');
   }
 
   void _hint(String title, String text) => showDialog<void>(
@@ -137,6 +211,28 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                                   ),
                                   title: Text((p['page_name'] ?? '').toString()),
                                   subtitle: const Text('Đã kết nối'),
+                                  trailing: IconButton(
+                                    tooltip: 'Gỡ liên kết',
+                                    onPressed: _disconnectingPageId != null
+                                        ? null
+                                        : () => _confirmDisconnect(
+                                              (p['page_id'] ?? '').toString(),
+                                              (p['page_name'] ?? '').toString(),
+                                            ),
+                                    icon: _disconnectingPageId ==
+                                            (p['page_id'] ?? '').toString()
+                                        ? const SizedBox(
+                                            width: 18,
+                                            height: 18,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          )
+                                        : const Icon(
+                                            Icons.link_off,
+                                            color: AppColors.danger,
+                                          ),
+                                  ),
                                 ),
                             const SizedBox(height: 8),
                             SizedBox(
@@ -186,6 +282,27 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                                   color: AppColors.textMuted,
                                   fontSize: 12,
                                 ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      SectionCard(
+                        title: 'Prompt Business AI (Meta Business Suite)',
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Sao chép mẫu chỉ dẫn chuyển ca và dán vào mục Business AI trong Meta Business Suite (thay [TÊN TIỆM] và [SỐ HOTLINE]).',
+                              style: TextStyle(color: AppColors.textMuted),
+                            ),
+                            const SizedBox(height: 10),
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                onPressed: _copyPrompt,
+                                icon: const Icon(Icons.copy, size: 18),
+                                label: const Text('Sao chép Prompt Business AI'),
                               ),
                             ),
                           ],

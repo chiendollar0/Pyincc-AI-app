@@ -277,6 +277,73 @@ app.get('/data-deletion', asyncHandler(async (req, res) => {
     '<li><strong>Xóa toàn bộ dữ liệu đã lưu trên Supabase:</strong> Gửi email yêu cầu xóa toàn bộ dữ liệu hội thoại, ảnh khách hàng, ca tư vấn và nhật ký về <strong>phanhungkg03@gmail.com</strong>; yêu cầu sẽ được xử lý hoàn tất trong vòng 48 giờ.</li></ol></body></html>'
   );
 }));
+app.get('/reset-password', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  return res.type('html').send(
+    '<!doctype html><html lang="vi"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>Đặt lại mật khẩu — Pyincc AI CRM</title>' +
+    '<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#fdf8fa;color:#2b1f25;margin:0;padding:24px;display:flex;justify-content:center;align-items:center;min-height:100vh;box-sizing:border-box}' +
+    '.card{background:#fff;border:1px solid #f0dfe6;border-radius:16px;padding:24px;max-width:420px;width:100%;box-shadow:0 4px 16px rgba(43,31,37,.06)}' +
+    'h1{margin:0 0 8px;font-size:20px}p{margin:0 0 16px;color:#6c5a63;font-size:14px;line-height:1.5}' +
+    'label{display:block;font-size:13px;font-weight:600;margin:12px 0 6px}' +
+    'input{width:100%;padding:10px 12px;border:1px solid #dccad2;border-radius:10px;font-size:15px;box-sizing:border-box}' +
+    'button{margin-top:18px;width:100%;padding:12px;border:none;border-radius:10px;background:#b84a7c;color:#fff;font-size:15px;font-weight:700;cursor:pointer}' +
+    'button:disabled{opacity:.6;cursor:not-allowed}' +
+    '.msg{margin-top:14px;padding:12px;border-radius:10px;font-size:14px;display:none}' +
+    '.msg.err{display:block;background:#ffebee;color:#b71c1c}' +
+    '.msg.ok{display:block;background:#e8f5e9;color:#1b5e20}</style></head><body>' +
+    '<div class="card"><h1>Đặt lại mật khẩu</h1>' +
+    '<p>Nhập mật khẩu mới (tối thiểu 8 ký tự) cho tài khoản Chủ tiệm Pyincc AI CRM.</p>' +
+    '<form id="f"><label for="p1">Mật khẩu mới</label><input id="p1" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>' +
+    '<label for="p2">Nhập lại mật khẩu mới</label><input id="p2" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>' +
+    '<button id="btn" type="submit">Cập nhật mật khẩu</button></form>' +
+    '<div id="msg" class="msg"></div></div>' +
+    '<script>(function(){' +
+    'var h=new URLSearchParams((window.location.hash||"").replace(/^#/,""));' +
+    'var q=new URLSearchParams(window.location.search||"");' +
+    'var tok=h.get("access_token")||"";var typ=h.get("type")||q.get("type")||"";' +
+    'var errDesc=h.get("error_description")||q.get("error_description")||"";' +
+    'if(window.location.hash&&window.history&&window.history.replaceState){window.history.replaceState(null,"",window.location.pathname);}' +
+    'var f=document.getElementById("f"),b=document.getElementById("btn"),m=document.getElementById("msg");' +
+    'function show(t,ok){m.textContent=t;m.className="msg "+(ok?"ok":"err");}' +
+    'if(!tok||(typ&&typ!=="recovery")){f.style.display="none";show(errDesc?"Liên kết đặt lại mật khẩu đã hết hạn hoặc không hợp lệ. Vui lòng yêu cầu lại trong ứng dụng.":"Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn. Vui lòng mở ứng dụng và chọn Quên mật khẩu để gửi lại.",false);return;}' +
+    'f.addEventListener("submit",function(e){e.preventDefault();' +
+    'var p1=document.getElementById("p1").value,p2=document.getElementById("p2").value;' +
+    'if(p1.length<8){show("Mật khẩu phải có ít nhất 8 ký tự.",false);return;}' +
+    'if(p1!==p2){show("Hai mật khẩu nhập vào chưa khớp.",false);return;}' +
+    'b.disabled=true;b.textContent="Đang cập nhật...";' +
+    'fetch("/auth/complete-password-reset",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({accessToken:tok,password:p1})})' +
+    '.then(function(r){return r.json().then(function(d){return{ok:r.ok,d:d};});})' +
+    '.then(function(res){if(res.ok){f.style.display="none";show("Đặt lại mật khẩu thành công! Bạn có thể quay lại ứng dụng Pyincc AI CRM để đăng nhập bằng mật khẩu mới.",true);}' +
+    'else{b.disabled=false;b.textContent="Cập nhật mật khẩu";show((res.d&&res.d.message)||"Liên kết đã hết hạn hoặc không hợp lệ. Vui lòng gửi yêu cầu mới trong ứng dụng.",false);}})' +
+    '.catch(function(){b.disabled=false;b.textContent="Cập nhật mật khẩu";show("Không kết nối được máy chủ. Vui lòng thử lại.",false);});});' +
+    '})();</script></body></html>'
+  );
+});
+app.post('/auth/complete-password-reset', authWriteLimiter, express.json({ limit: '4kb' }), asyncHandler(async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'SERVICE_UNAVAILABLE' });
+  const accessToken = typeof req.body?.accessToken === 'string' ? req.body.accessToken.trim() : '';
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  if (!accessToken) {
+    return res.status(400).json({ error: 'RESET_TOKEN_REQUIRED', message: 'Thiếu mã xác thực đặt lại mật khẩu.' });
+  }
+  if (password.length < 8 || password.length > 128) {
+    return res.status(400).json({ error: 'PASSWORD_INVALID', message: 'Mật khẩu mới cần từ 8 đến 128 ký tự.' });
+  }
+  const { data: userData, error: userErr } = await supabase.auth.getUser(accessToken);
+  const userId = userData?.user?.id;
+  if (userErr || !userId) {
+    return res.status(401).json({ error: 'INVALID_RECOVERY_TOKEN', message: 'Liên kết đặt lại mật khẩu đã hết hạn hoặc không hợp lệ.' });
+  }
+  const { error: updateErr } = await supabase.auth.admin.updateUserById(userId, { password });
+  if (updateErr) {
+    console.error(JSON.stringify({ event: 'password_reset_update_failed', message: updateErr.message }));
+    return res.status(500).json({ error: 'PASSWORD_RESET_FAILED', message: 'Chưa thể cập nhật mật khẩu lúc này. Vui lòng thử lại.' });
+  }
+  return res.json({ success: true });
+}));
 app.get('/internal/status', requireInternalApiKey, (_req, res) =>
   res.json({ ok: true, configured: missingConfig.length === 0 }));
 app.get('/internal/webhook-status', requireInternalApiKey, (_req, res) =>
@@ -590,6 +657,38 @@ app.get('/connected-pages', requireAuth, requireRole('owner'), asyncHandler(asyn
     .eq('org_id', req.orgId).order('updated_at', { ascending: false });
   if (error) return res.status(500).json({ error: 'Failed to load connected pages' });
   return res.json({ pages: data || [] });
+}));
+
+app.delete('/connected-pages/:pageId', writeLimiter, requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
+  const pageId = String(req.params.pageId || '').trim();
+  if (!pageId) return res.status(400).json({ error: 'PAGE_ID_REQUIRED' });
+  const { data: deleted, error } = await supabase.from('connected_pages')
+    .delete()
+    .eq('org_id', req.orgId)
+    .eq('page_id', pageId)
+    .select('page_id, page_name')
+    .maybeSingle();
+  if (error) {
+    console.error(JSON.stringify({ event: 'disconnect_page_failed', pageId, message: error.message }));
+    return res.status(500).json({ error: 'DISCONNECT_PAGE_FAILED' });
+  }
+  if (!deleted) return res.status(404).json({ error: 'PAGE_NOT_FOUND' });
+
+  await supabase.from('handover_threads')
+    .update({ active: false, updated_at: new Date().toISOString() })
+    .eq('org_id', req.orgId)
+    .eq('page_id', pageId);
+
+  await recordAuditLog({
+    orgId: req.orgId,
+    actorUserId: req.authUser.id,
+    actorRole: req.userRole,
+    action: 'connected_page.disconnect',
+    targetType: 'connected_page',
+    targetId: pageId,
+    metadata: { page_name: deleted.page_name || '' },
+  });
+  return res.json({ success: true, page_id: deleted.page_id });
 }));
 
 async function verifyFacebookUserToken(inputToken) {
@@ -1056,13 +1155,17 @@ app.get('/bookings', requireAuth, requireRole('owner'), asyncHandler(async (req,
     .order('scheduled_at', { ascending: true }).limit(200);
   if (error) return res.status(500).json({ error: 'Failed to fetch bookings' });
   const bookings = (data || []).map((b) => {
-    let followUpDue = b.follow_up_due || null;
-    if (!followUpDue && !b.followup_done && b.status === 'done') {
-      const baseDay = b.service_date || (b.scheduled_at ? vnDateString(new Date(b.scheduled_at)) : null);
-      if (baseDay) {
-        const dueDate = new Date(`${baseDay}T00:00:00+07:00`);
-        if (!Number.isNaN(dueDate.getTime())) {
-          followUpDue = vnDateString(new Date(dueDate.getTime() + 7 * 24 * 3600 * 1000));
+    let followUpDue = null;
+    if (!b.followup_done && b.status !== 'cancelled') {
+      if (b.follow_up_due) {
+        followUpDue = b.follow_up_due;
+      } else {
+        const baseDay = b.service_date || (b.scheduled_at ? vnDateString(new Date(b.scheduled_at)) : null);
+        if (baseDay) {
+          const dueDate = new Date(`${baseDay}T00:00:00+07:00`);
+          if (!Number.isNaN(dueDate.getTime())) {
+            followUpDue = vnDateString(new Date(dueDate.getTime() + 7 * 24 * 3600 * 1000));
+          }
         }
       }
     }

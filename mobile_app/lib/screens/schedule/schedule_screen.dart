@@ -24,6 +24,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   bool _loading = true;
   String? _error;
   DateTime _day = DateTime.now();
+  final Set<String> _markingIds = <String>{};
 
   @override
   void initState() {
@@ -58,9 +59,25 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   List<Map<String, dynamic>> get _followUps {
     final today = _dayKey(DateTime.now());
     return _all.where((b) {
+      if (b['followup_done'] == true) return false;
       final due = (b['follow_up_due'] ?? '').toString();
       return due.isNotEmpty && due.compareTo(today) <= 0;
     }).toList();
+  }
+
+  Future<void> _markFollowupDone(String bookingId) async {
+    if (bookingId.isEmpty || _markingIds.contains(bookingId)) return;
+    setState(() => _markingIds.add(bookingId));
+    try {
+      await widget.repo.markFollowupDone(bookingId);
+      if (!mounted) return;
+      showAppMessage(context, 'Đã đánh dấu kiểm tra sau 7 ngày.');
+      await _load();
+    } catch (e) {
+      if (mounted) showAppMessage(context, userMessage(e), isError: true);
+    } finally {
+      if (mounted) setState(() => _markingIds.remove(bookingId));
+    }
   }
 
   Future<void> _add() async {
@@ -100,6 +117,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   @override
   Widget build(BuildContext context) {
     final items = _dayBookings;
+    final followUps = _followUps;
     return Column(
       children: [
         BrandHeader(
@@ -154,7 +172,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                           ),
                           SectionCard(
                             title: 'Cần nhắc kiểm tra sau dịch vụ',
-                            child: _followUps.isEmpty
+                            child: followUps.isEmpty
                                 ? const Text(
                                     'Chưa có khách đến mốc 7 ngày.',
                                     style:
@@ -162,8 +180,21 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                                   )
                                 : Column(
                                     children: [
-                                      for (final b in _followUps)
-                                        _BookingTile(b),
+                                      for (final b in followUps)
+                                        _BookingTile(
+                                          b,
+                                          trailing: OutlinedButton(
+                                            onPressed: _markingIds.contains(
+                                              (b['id'] ?? '').toString(),
+                                            )
+                                                ? null
+                                                : () => _markFollowupDone(
+                                                      (b['id'] ?? '')
+                                                          .toString(),
+                                                    ),
+                                            child: const Text('Đã kiểm tra'),
+                                          ),
+                                        ),
                                     ],
                                   ),
                           ),
@@ -306,9 +337,10 @@ class _AddBookingDialogState extends State<_AddBookingDialog> {
 }
 
 class _BookingTile extends StatelessWidget {
-  const _BookingTile(this.b);
+  const _BookingTile(this.b, {this.trailing});
 
   final Map<String, dynamic> b;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -326,6 +358,7 @@ class _BookingTile extends StatelessWidget {
           (b['customer_phone'] ?? '').toString(),
         ].where((s) => s.isNotEmpty).join(' • '),
       ),
+      trailing: trailing,
     );
   }
 }

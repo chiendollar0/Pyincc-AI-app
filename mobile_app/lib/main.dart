@@ -234,6 +234,8 @@ class _BeautyCrmAppState extends State<BeautyCrmApp> {
               : LoginScreen(
                   authService: _authService,
                   initialEmail: _userEmail,
+                  passwordResetRedirectUrl:
+                      '${_resolveBackendUrl().replaceFirst(RegExp(r'/+$'), '')}/reset-password',
                   onSignedIn: _onSignedIn,
                 ),
     );
@@ -243,12 +245,14 @@ class _BeautyCrmAppState extends State<BeautyCrmApp> {
 class LoginScreen extends StatefulWidget {
   final AuthService authService;
   final String initialEmail;
+  final String passwordResetRedirectUrl;
   final void Function(AuthSession session) onSignedIn;
 
   const LoginScreen({
     super.key,
     required this.authService,
     this.initialEmail = '',
+    this.passwordResetRedirectUrl = '',
     required this.onSignedIn,
   });
 
@@ -299,7 +303,10 @@ class _LoginScreenState extends State<LoginScreen> {
     if (email == null || email.isEmpty || !mounted) return;
 
     try {
-      await widget.authService.requestPasswordReset(email);
+      await widget.authService.requestPasswordReset(
+        email,
+        redirectTo: widget.passwordResetRedirectUrl,
+      );
       if (!mounted) return;
       showAppMessage(
         context,
