@@ -78,15 +78,26 @@ class _StudioScreenState extends State<StudioScreen> {
     return null;
   }
 
-  List<String> get _groups => [
-        'Tất cả',
-        ...{for (final e in _catalog) (e['group_label'] ?? 'Khác').toString()},
-      ];
+  List<String> get _groups {
+    final seen = <String>{};
+    final out = <String>['Tất cả'];
+    for (final e in _catalog) {
+      final label = (e['group_label'] ?? 'Khác').toString().trim();
+      final display = label.isEmpty ? 'Khác' : label;
+      final key = display.toLowerCase();
+      if (seen.add(key)) out.add(display);
+    }
+    return out;
+  }
 
   List<Map<String, dynamic>> get _visible => _group == 'Tất cả'
       ? _catalog
       : _catalog
-          .where((e) => (e['group_label'] ?? 'Khác').toString() == _group)
+          .where(
+            (e) =>
+                (e['group_label'] ?? 'Khác').toString().trim().toLowerCase() ==
+                _group.toLowerCase(),
+          )
           .toList();
 
   Future<void> _pick(ImageSource source) async {
@@ -136,7 +147,6 @@ class _StudioScreenState extends State<StudioScreen> {
       if (!mounted) return;
       final msg = e is ImagePrepareException ? e.message : userMessage(e);
       setState(() => _analyzeError = msg);
-      showAppMessage(context, msg, isError: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }

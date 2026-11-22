@@ -37,20 +37,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
+    String? firstError;
+    Future<Map<String, dynamic>?> safe(Future<Map<String, dynamic>> call) async {
+      try {
+        return await call;
+      } catch (e) {
+        firstError ??= userMessage(e);
+        return null;
+      }
+    }
+
     try {
-      final results = await Future.wait<Map<String, dynamic>>([
-        widget.repo.tenant(),
-        widget.repo.aiUsage(),
-        widget.repo.connectionStatus(),
+      final results = await Future.wait<Map<String, dynamic>?>([
+        safe(widget.repo.tenant()),
+        safe(widget.repo.aiUsage()),
+        safe(widget.repo.connectionStatus()),
       ]);
       if (!mounted) return;
       setState(() {
-        _tenant = results[0];
-        _ai = results[1];
-        _conn = results[2];
+        if (results[0] != null) _tenant = results[0]!;
+        if (results[1] != null) _ai = results[1]!;
+        if (results[2] != null) _conn = results[2]!;
       });
-    } catch (e) {
-      if (mounted) showAppMessage(context, userMessage(e), isError: true);
+      if (firstError != null &&
+          results[0] == null &&
+          results[1] == null &&
+          results[2] == null) {
+        showAppMessage(context, firstError!, isError: true);
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -70,7 +84,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'name': result.name,
         'specialty': result.specialty,
       });
-      if (mounted) showAppMessage(context, 'Đã lưu thông tin tiệm.');
+      if (!mounted) return;
+      setState(() {
+        _tenant = {
+          ..._tenant,
+          'name': result.name,
+          'specialty': result.specialty,
+        };
+      });
+      showAppMessage(context, 'Đã lưu thông tin tiệm.');
       _load();
     } catch (e) {
       if (mounted) showAppMessage(context, userMessage(e), isError: true);
@@ -257,6 +279,7 @@ class _EditTenantDialogState extends State<_EditTenantDialog> {
       TextEditingController(text: widget.initialName);
   late final TextEditingController _specialty =
       TextEditingController(text: widget.initialSpecialty);
+  String? _validationError;
 
   @override
   void dispose() {
@@ -265,15 +288,33 @@ class _EditTenantDialogState extends State<_EditTenantDialog> {
     super.dispose();
   }
 
+  void _submit() {
+    final name = _name.text.trim();
+    if (name.isEmpty) {
+      setState(() => _validationError = 'Vui lòng nhập tên tiệm.');
+      return;
+    }
+    Navigator.pop(context, (
+      name: name,
+      specialty: _specialty.text.trim(),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Thông tin tiệm'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           TextField(
             controller: _name,
+            onChanged: (_) {
+              if (_validationError != null) {
+                setState(() => _validationError = null);
+              }
+            },
             decoration: const InputDecoration(labelText: 'Tên tiệm'),
           ),
           const SizedBox(height: 10),
@@ -284,6 +325,13 @@ class _EditTenantDialogState extends State<_EditTenantDialog> {
               labelText: 'Chuyên môn (ví dụ: phun môi, xóa xăm)',
             ),
           ),
+          if (_validationError != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _validationError!,
+              style: const TextStyle(color: AppColors.danger, fontSize: 12),
+            ),
+          ],
         ],
       ),
       actions: [
@@ -292,10 +340,7 @@ class _EditTenantDialogState extends State<_EditTenantDialog> {
           child: const Text('Hủy'),
         ),
         FilledButton(
-          onPressed: () => Navigator.pop(context, (
-            name: _name.text.trim(),
-            specialty: _specialty.text.trim(),
-          )),
+          onPressed: _submit,
           child: const Text('Lưu'),
         ),
       ],

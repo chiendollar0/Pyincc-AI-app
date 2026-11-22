@@ -39,6 +39,12 @@ String userMessage(Object error) {
         if (error.message.contains('ONBOARDING_CODE_REQUIRED')) {
           return 'Vui lòng nhập mã thiết lập tiệm.';
         }
+        if (error.message.contains('TENANT_NAME_INVALID')) {
+          return 'Tên tiệm không hợp lệ (cần nhập và tối đa 160 ký tự).';
+        }
+        if (error.message.contains('TENANT_SPECIALTY_INVALID')) {
+          return 'Chuyên môn tối đa 300 ký tự.';
+        }
         return 'Thông tin gửi lên chưa hợp lệ. Vui lòng kiểm tra lại.';
       case 401:
         return 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.';
