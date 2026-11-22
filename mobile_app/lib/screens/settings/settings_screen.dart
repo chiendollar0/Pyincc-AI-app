@@ -59,10 +59,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (results[1] != null) _ai = results[1]!;
         if (results[2] != null) _conn = results[2]!;
       });
-      if (firstError != null &&
-          results[0] == null &&
-          results[1] == null &&
-          results[2] == null) {
+      if (firstError != null) {
         showAppMessage(context, firstError!, isError: true);
       }
     } finally {

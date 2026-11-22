@@ -150,6 +150,7 @@ class _BeautyCrmAppState extends State<BeautyCrmApp> {
     if (_refreshInFlight != null) return _refreshInFlight!;
     final refresh = _refreshToken.trim();
     if (refresh.isEmpty) return Future<String?>.value(null);
+    final epochAtStart = _sessionEpoch;
 
     final future = () async {
       try {
@@ -157,24 +158,29 @@ class _BeautyCrmAppState extends State<BeautyCrmApp> {
           refresh,
           fallbackEmail: _userEmail,
         );
+        if (!mounted || _sessionEpoch != epochAtStart) {
+          return null;
+        }
         if (refreshed == null) {
           await _storage.clear();
-          if (mounted) {
+          if (mounted && _sessionEpoch == epochAtStart) {
             setState(() {
               _accessToken = '';
               _refreshToken = '';
+              _sessionEpoch += 1;
             });
           }
           return null;
         }
         await _storage.write(refreshed);
-        if (mounted) {
-          setState(() {
-            _accessToken = refreshed.accessToken;
-            _refreshToken = refreshed.refreshToken;
-            _userEmail = refreshed.email;
-          });
+        if (!mounted || _sessionEpoch != epochAtStart) {
+          return null;
         }
+        setState(() {
+          _accessToken = refreshed.accessToken;
+          _refreshToken = refreshed.refreshToken;
+          _userEmail = refreshed.email;
+        });
         return refreshed.accessToken;
       } catch (_) {
         // Lỗi mạng tạm thời: không xóa phiên đang lưu
@@ -203,6 +209,7 @@ class _BeautyCrmAppState extends State<BeautyCrmApp> {
       _accessToken = '';
       _refreshToken = '';
       _userEmail = '';
+      _sessionEpoch += 1;
     });
     await _storage.clear();
     await _authService.signOut(tokenToRevoke);
