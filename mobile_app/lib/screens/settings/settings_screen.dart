@@ -4,6 +4,7 @@ import '../../core/errors/user_message.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/ui/widgets.dart';
 import '../../data/crm_repo.dart';
+import 'audit_logs_screen.dart';
 import 'catalog_screen.dart';
 import 'connection_screen.dart';
 
@@ -181,9 +182,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _tile(
                       Icons.history,
                       'Nhật ký hoạt động',
-                      'Sẽ có ở phiên bản sau',
-                      null,
-                      enabled: false,
+                      'Lịch sử duyệt, gửi tin và thay đổi cài đặt',
+                      () => _open(AuditLogsScreen(repo: widget.repo)),
                     ),
                   ],
                 ),

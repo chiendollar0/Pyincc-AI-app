@@ -187,7 +187,10 @@ class AuthService {
     );
   }
 
-  Future<void> requestPasswordReset(String email) async {
+  Future<void> requestPasswordReset(
+    String email, {
+    String? redirectTo,
+  }) async {
     final cleanEmail = email.trim();
     if (cleanEmail.isEmpty || !cleanEmail.contains('@')) {
       throw const AuthFailure('Vui lòng nhập địa chỉ Email hợp lệ.');
@@ -198,11 +201,16 @@ class AuthService {
       );
     }
 
+    final cleanRedirect = (redirectTo ?? '').trim();
+    final path = cleanRedirect.isEmpty
+        ? '/auth/v1/recover'
+        : '/auth/v1/recover?redirect_to=${Uri.encodeQueryComponent(cleanRedirect)}';
+
     late final http.Response response;
     try {
       response = await http
           .post(
-            _endpoint('/auth/v1/recover'),
+            _endpoint(path),
             headers: {
               'Content-Type': 'application/json',
               'apikey': supabaseAnonKey.trim(),

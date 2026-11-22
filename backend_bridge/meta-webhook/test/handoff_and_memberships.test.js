@@ -246,6 +246,13 @@ function createMockEnv() {
         if (!u) return { data: { user: null }, error: { message: 'Invalid token' } };
         return { data: { user: u }, error: null };
       },
+      admin: {
+        async updateUserById(userId, attrs) {
+          state.passwordUpdates = state.passwordUpdates || [];
+          state.passwordUpdates.push({ userId, ...attrs });
+          return { data: { user: { id: userId } }, error: null };
+        },
+      },
     },
     from(tableName) {
       return buildQuery(tableName);
@@ -380,8 +387,10 @@ function createMockEnv() {
     const res = {
       statusCode: 200,
       contentType: 'application/json',
+      headers: {},
       body: null,
       finished: false,
+      setHeader(name, value) { this.headers[String(name).toLowerCase()] = value; return this; },
       status(code) { this.statusCode = code; return this; },
       type(t) { this.contentType = t; return this; },
       json(data) { this.body = data; markFinished(); return this; },
@@ -1012,4 +1021,95 @@ test('UI v2 endpoints: /tenant, /ai-usage, /connection/status (honest nulls), an
   assert.equal(toggled.statusCode, 200);
   assert.equal(toggled.body.item.active, false);
 });
+
+test('Password recovery page and completion endpoint validate token and password', async () => {
+  const { state, invoke, tokens } = createMockEnv();
+
+  const pageRes = await invoke('GET', '/reset-password');
+  assert.equal(pageRes.statusCode, 200);
+  assert.match(String(pageRes.rawBody || pageRes.body || ''), /Đặt lại mật khẩu/);
+
+  const shortPass = await invoke('POST', '/auth/complete-password-reset', {
+    body: { accessToken: tokens.ownerToken, password: 'short' },
+  });
+  assert.equal(shortPass.statusCode, 400);
+  assert.equal(shortPass.body.error, 'PASSWORD_INVALID');
+
+  const badTok = await invoke('POST', '/auth/complete-password-reset', {
+    body: { accessToken: 'expired-or-bogus-token', password: 'NewStrongPassword123' },
+  });
+  assert.equal(badTok.statusCode, 401);
+  assert.equal(badTok.body.error, 'INVALID_RECOVERY_TOKEN');
+
+  const ok = await invoke('POST', '/auth/complete-password-reset', {
+    body: { accessToken: tokens.ownerToken, password: 'NewStrongPassword123' },
+  });
+  assert.equal(ok.statusCode, 200);
+  assert.equal(ok.body.success, true);
+  assert.equal(state.passwordUpdates.length, 1);
+  assert.equal(state.passwordUpdates[0].userId, 'user-owner');
+});
+
+test('DELETE /connected-pages/:pageId lets owner unlink a Fanpage and records audit log', async () => {
+  const { state, invoke, tokens } = createMockEnv();
+  state.tables.handover_threads = [{
+    id: 'ht-1',
+    org_id: 'org-1',
+    page_id: 'page-test-1',
+    psid: 'psid-1',
+    active: true,
+  }];
+
+  const forbidden = await invoke('DELETE', '/connected-pages/page-test-1', {
+    token: tokens.staffToken,
+  });
+  assert.equal(forbidden.statusCode, 403);
+
+  const missing = await invoke('DELETE', '/connected-pages/nonexistent-page', {
+    token: tokens.ownerToken,
+  });
+  assert.equal(missing.statusCode, 404);
+  assert.equal(missing.body.error, 'PAGE_NOT_FOUND');
+
+  const unlinked = await invoke('DELETE', '/connected-pages/page-test-1', {
+    token: tokens.ownerToken,
+  });
+  assert.equal(unlinked.statusCode, 200);
+  assert.equal(unlinked.body.page_id, 'page-test-1');
+  assert.equal(state.tables.connected_pages.length, 0);
+  assert.equal(state.tables.handover_threads[0].active, false);
+  assert.ok(state.tables.audit_logs.some((l) => l.action === 'connected_page.disconnect' && l.target_id === 'page-test-1'));
+});
+
+test('GET /bookings exposes 7-day follow_up_due and clears it after PATCH /bookings/:id/followup', async () => {
+  const { state, invoke, tokens } = createMockEnv();
+  const eightDaysAgo = new Date(Date.now() - 8 * 24 * 3600 * 1000).toISOString();
+  state.tables.bookings = [{
+    id: 'bk-due-1',
+    org_id: 'org-1',
+    customer_name: 'Khách Kiểm Tra',
+    customer_phone: '0900000000',
+    service_name: 'Phun môi',
+    scheduled_at: eightDaysAgo,
+    status: 'confirmed',
+    followup_done: false,
+  }];
+
+  const before = await invoke('GET', '/bookings', { token: tokens.ownerToken });
+  assert.equal(before.statusCode, 200);
+  assert.equal(before.body.bookings.length, 1);
+  assert.ok(before.body.bookings[0].follow_up_due, 'Expected computed follow_up_due for 8-day-old booking');
+
+  const markDone = await invoke('PATCH', '/bookings/bk-due-1/followup', {
+    token: tokens.ownerToken,
+    body: { done: true },
+  });
+  assert.equal(markDone.statusCode, 200);
+  assert.equal(markDone.body.booking.followup_done, true);
+
+  const after = await invoke('GET', '/bookings', { token: tokens.ownerToken });
+  assert.equal(after.statusCode, 200);
+  assert.equal(after.body.bookings[0].follow_up_due, null);
+});
+
 
