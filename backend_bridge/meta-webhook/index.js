@@ -787,12 +787,32 @@ function defaultGroupLabelForCategory(category) {
   return 'Khác';
 }
 
+function isMissingColumnError(err, colName) {
+  if (!err) return false;
+  const code = String(err.code || '');
+  const msg = String(err.message || '');
+  return code === '42703' || code === 'PGRST204' || (colName && msg.toLowerCase().includes(colName.toLowerCase()));
+}
+
 app.get('/tenant', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
-  const { data, error } = await supabase.from('organizations')
+  let { data, error } = await supabase.from('organizations')
     .select('id, name, specialty')
     .eq('id', req.orgId)
     .maybeSingle();
-  if (error || !data) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
+  if (error && isMissingColumnError(error, 'specialty')) {
+    console.warn(JSON.stringify({ event: 'tenant_select_specialty_fallback', message: error.message }));
+    const fallback = await supabase.from('organizations')
+      .select('id, name')
+      .eq('id', req.orgId)
+      .maybeSingle();
+    data = fallback.data;
+    error = fallback.error;
+  }
+  if (error) {
+    console.error(JSON.stringify({ event: 'tenant_fetch_failed', orgId: req.orgId, code: error.code, message: error.message }));
+    return res.status(500).json({ error: 'TENANT_LOAD_FAILED' });
+  }
+  if (!data) return res.status(404).json({ error: 'TENANT_NOT_FOUND' });
   return res.json({
     id: data.id,
     name: String(data.name || ''),
@@ -805,12 +825,30 @@ app.put('/tenant', writeLimiter, requireAuth, requireRole('owner'), express.json
   const specialty = typeof req.body?.specialty === 'string' ? req.body.specialty.trim() : '';
   if (!name || name.length > 160) return res.status(400).json({ error: 'TENANT_NAME_INVALID' });
   if (specialty.length > 300) return res.status(400).json({ error: 'TENANT_SPECIALTY_INVALID' });
-  const { data, error } = await supabase.from('organizations')
+  let { data, error } = await supabase.from('organizations')
     .update({ name, specialty })
     .eq('id', req.orgId)
     .select('id, name, specialty')
     .maybeSingle();
-  if (error || !data) return res.status(500).json({ error: 'Failed to update tenant' });
+  if (error && isMissingColumnError(error, 'specialty')) {
+    console.warn(JSON.stringify({ event: 'tenant_update_specialty_fallback', message: error.message }));
+    const fallback = await supabase.from('organizations')
+      .update({ name })
+      .eq('id', req.orgId)
+      .select('id, name')
+      .maybeSingle();
+    data = fallback.data;
+    error = fallback.error;
+  }
+  if (error || !data) {
+    console.error(JSON.stringify({
+      event: 'tenant_update_failed',
+      orgId: req.orgId,
+      code: error?.code || null,
+      message: error?.message || 'no_row_updated',
+    }));
+    return res.status(500).json({ error: 'Failed to update tenant' });
+  }
   await recordAuditLog({
     orgId: req.orgId,
     actorUserId: req.authUser.id,
@@ -2079,12 +2117,27 @@ async function createSignedUrl(path, expiresInSeconds = 3600) {
 
 async function uploadWithRetry(path, buffer, mimeType, maxRetries = 3) {
   let lastError;
+  let bucketCreated = false;
   for (let attempt = 0; attempt < maxRetries; attempt += 1) {
     const { error } = await supabase.storage.from(config.storageBucket).upload(path, buffer, {
       contentType: mimeType, upsert: true, cacheControl: '3600',
     });
     if (!error) return { error: null };
     lastError = error;
+    const msg = String(error.message || '').toLowerCase();
+    if (!bucketCreated && msg.includes('bucket') && msg.includes('not found') && typeof supabase.storage.createBucket === 'function') {
+      bucketCreated = true;
+      const { error: createErr } = await supabase.storage.createBucket(config.storageBucket, {
+        public: false,
+        fileSizeLimit: 15 * 1024 * 1024,
+        allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp'],
+      });
+      if (!createErr || String(createErr.message || '').toLowerCase().includes('already exists')) {
+        console.log(JSON.stringify({ event: 'storage_bucket_ensured', bucket: config.storageBucket }));
+        continue;
+      }
+      console.error(JSON.stringify({ event: 'storage_bucket_create_failed', bucket: config.storageBucket, message: createErr.message }));
+    }
     if (attempt < maxRetries - 1) await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** attempt)));
   }
   return { error: lastError };

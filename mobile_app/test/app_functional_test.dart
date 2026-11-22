@@ -5,6 +5,23 @@ import 'package:pyincc_app/core/errors/user_message.dart';
 import 'package:pyincc_app/data/crm_repo.dart';
 import 'package:pyincc_app/main.dart';
 import 'package:pyincc_app/services/api_client.dart';
+import 'package:pyincc_app/services/auth_service.dart';
+import 'package:pyincc_app/services/session_storage.dart';
+
+class _InMemorySessionStorage extends SessionStorage {
+  _InMemorySessionStorage([this._saved]);
+
+  AuthSession? _saved;
+
+  @override
+  Future<AuthSession?> read() async => _saved;
+
+  @override
+  Future<void> write(AuthSession session) async => _saved = session;
+
+  @override
+  Future<void> clear() async => _saved = null;
+}
 
 class _FakeCrmRepo extends CrmRepo {
   _FakeCrmRepo() : super(const ApiClient(baseUrl: 'https://test.local'));
@@ -42,7 +59,7 @@ class _FakeCrmRepo extends CrmRepo {
 
 void main() {
   testWidgets(
-    '1. Unauthenticated launch displays LoginScreen and validates empty input',
+    '1. Unauthenticated launch displays LoginScreen, validates empty input, and opens/closes Forgot Password dialog',
     (WidgetTester tester) async {
       tester.view.physicalSize = const Size(1080, 1920);
       tester.view.devicePixelRatio = 2.0;
@@ -55,6 +72,7 @@ void main() {
       expect(find.text('Pyincc AI CRM'), findsOneWidget);
       expect(find.text('Email đăng nhập'), findsOneWidget);
       expect(find.text('Mật khẩu'), findsOneWidget);
+      expect(find.text('Quên mật khẩu?'), findsOneWidget);
 
       await tester.tap(find.text('Đăng nhập'));
       await tester.pumpAndSettle();
@@ -64,6 +82,44 @@ void main() {
         findsOneWidget,
       );
       expect(find.textContaining('API Key'), findsNothing);
+
+      // Open and close Forgot Password dialog safely
+      await tester.tap(find.text('Quên mật khẩu?'));
+      await tester.pumpAndSettle();
+      expect(find.text('Quên mật khẩu'), findsOneWidget);
+      await tester.tap(find.text('Hủy'));
+      await tester.pumpAndSettle();
+      expect(find.text('Quên mật khẩu'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    '1b. Persisted auth session auto-restores CrmShell on app restart without forcing login',
+    (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 2.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final storage = _InMemorySessionStorage(
+        AuthSession(
+          accessToken: 'persisted-valid-token',
+          refreshToken: 'persisted-refresh-token',
+          email: 'owner@salon.vn',
+          expiresAt: DateTime.now().add(const Duration(hours: 1)),
+        ),
+      );
+
+      await tester.pumpWidget(
+        BeautyCrmApp(
+          sessionStorage: storage,
+          repoOverride: _FakeCrmRepo(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Hộp thư'), findsWidgets);
+      expect(find.text('Email đăng nhập'), findsNothing);
     },
   );
 

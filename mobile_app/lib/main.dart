@@ -6,6 +6,7 @@ import 'core/theme/app_theme.dart';
 import 'data/crm_repo.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
+import 'services/session_storage.dart';
 
 void main() {
   runApp(const BeautyCrmApp());
@@ -14,11 +15,13 @@ void main() {
 class BeautyCrmApp extends StatefulWidget {
   final String? initialAuthToken;
   final CrmRepo? repoOverride;
+  final SessionStorage? sessionStorage;
 
   const BeautyCrmApp({
     super.key,
     this.initialAuthToken,
     this.repoOverride,
+    this.sessionStorage,
   });
 
   @override
@@ -61,24 +64,142 @@ class _BeautyCrmAppState extends State<BeautyCrmApp> {
     supabaseAnonKey: _supabaseAnonKey,
   );
 
+  late final SessionStorage _storage =
+      widget.sessionStorage ?? const SessionStorage();
+
   late String _accessToken = (widget.initialAuthToken ??
           const String.fromEnvironment('BACKEND_AUTH_TOKEN', defaultValue: ''))
       .trim();
+  String _refreshToken = '';
+  String _userEmail = '';
+  bool _restoringSession = false;
+  int _sessionEpoch = 0;
+  Future<String?>? _refreshInFlight;
+
+  late final CrmRepo _liveRepo = CrmRepo(
+    ApiClient(
+      baseUrl: _resolveBackendUrl(),
+      tokenProvider: () => _accessToken,
+      onUnauthorized: _refreshAccessToken,
+    ),
+  );
 
   bool get _isSignedIn => _accessToken.isNotEmpty;
 
-  CrmRepo _buildRepo() =>
-      widget.repoOverride ??
-      CrmRepo(
-        ApiClient(
-          baseUrl: _resolveBackendUrl(),
-          authToken: _accessToken,
-        ),
-      );
+  @override
+  void initState() {
+    super.initState();
+    // Nếu không truyền initialAuthToken (chạy app thật), khôi phục phiên đã lưu
+    if (widget.initialAuthToken == null && _accessToken.isEmpty) {
+      _restoringSession = true;
+      _restorePersistedSession();
+    }
+  }
 
-  void _onSignedIn(AuthSession session) {
+  Future<void> _restorePersistedSession() async {
+    try {
+      final saved = await _storage.read();
+      if (!mounted) return;
+      if (saved == null) {
+        setState(() => _restoringSession = false);
+        return;
+      }
+
+      if (saved.isExpiringSoon && saved.refreshToken.isNotEmpty) {
+        try {
+          final refreshed = await _authService.refreshSession(
+            saved.refreshToken,
+            fallbackEmail: saved.email,
+          );
+          if (!mounted) return;
+          if (refreshed != null) {
+            await _storage.write(refreshed);
+            if (!mounted) return;
+            setState(() {
+              _accessToken = refreshed.accessToken;
+              _refreshToken = refreshed.refreshToken;
+              _userEmail = refreshed.email;
+              _sessionEpoch += 1;
+              _restoringSession = false;
+            });
+            return;
+          }
+          // Refresh token đã hết hạn hẳn / bị thu hồi → xóa và về màn đăng nhập
+          await _storage.clear();
+          if (!mounted) return;
+          setState(() => _restoringSession = false);
+          return;
+        } catch (_) {
+          // Mất mạng tạm thời: vẫn giữ phiên đã lưu để app không bị văng ra
+        }
+      }
+
+      setState(() {
+        _accessToken = saved.accessToken;
+        _refreshToken = saved.refreshToken;
+        _userEmail = saved.email;
+        _sessionEpoch += 1;
+        _restoringSession = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _restoringSession = false);
+    }
+  }
+
+  Future<String?> _refreshAccessToken() {
+    if (_refreshInFlight != null) return _refreshInFlight!;
+    final refresh = _refreshToken.trim();
+    if (refresh.isEmpty) return Future<String?>.value(null);
+    final epochAtStart = _sessionEpoch;
+
+    final future = () async {
+      try {
+        final refreshed = await _authService.refreshSession(
+          refresh,
+          fallbackEmail: _userEmail,
+        );
+        if (!mounted || _sessionEpoch != epochAtStart) {
+          return null;
+        }
+        if (refreshed == null) {
+          await _storage.clear();
+          if (mounted && _sessionEpoch == epochAtStart) {
+            setState(() {
+              _accessToken = '';
+              _refreshToken = '';
+              _sessionEpoch += 1;
+            });
+          }
+          return null;
+        }
+        await _storage.write(refreshed);
+        if (!mounted || _sessionEpoch != epochAtStart) {
+          return null;
+        }
+        setState(() {
+          _accessToken = refreshed.accessToken;
+          _refreshToken = refreshed.refreshToken;
+          _userEmail = refreshed.email;
+        });
+        return refreshed.accessToken;
+      } catch (_) {
+        // Lỗi mạng tạm thời: không xóa phiên đang lưu
+        return null;
+      }
+    }();
+
+    _refreshInFlight = future.whenComplete(() => _refreshInFlight = null);
+    return _refreshInFlight!;
+  }
+
+  Future<void> _onSignedIn(AuthSession session) async {
+    await _storage.write(session);
+    if (!mounted) return;
     setState(() {
       _accessToken = session.accessToken.trim();
+      _refreshToken = session.refreshToken.trim();
+      _userEmail = session.email.trim();
+      _sessionEpoch += 1;
     });
   }
 
@@ -86,7 +207,11 @@ class _BeautyCrmAppState extends State<BeautyCrmApp> {
     final tokenToRevoke = _accessToken;
     setState(() {
       _accessToken = '';
+      _refreshToken = '';
+      _userEmail = '';
+      _sessionEpoch += 1;
     });
+    await _storage.clear();
     await _authService.signOut(tokenToRevoke);
   }
 
@@ -96,27 +221,34 @@ class _BeautyCrmAppState extends State<BeautyCrmApp> {
       title: 'Pyincc AI CRM',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
-      home: _isSignedIn
-          ? CrmShell(
-              key: ValueKey<String>(_accessToken),
-              repo: _buildRepo(),
-              onSignOut: _onSignOut,
+      home: _restoringSession
+          ? const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
             )
-          : LoginScreen(
-              authService: _authService,
-              onSignedIn: _onSignedIn,
-            ),
+          : _isSignedIn
+              ? CrmShell(
+                  key: ValueKey<int>(_sessionEpoch),
+                  repo: widget.repoOverride ?? _liveRepo,
+                  onSignOut: _onSignOut,
+                )
+              : LoginScreen(
+                  authService: _authService,
+                  initialEmail: _userEmail,
+                  onSignedIn: _onSignedIn,
+                ),
     );
   }
 }
 
 class LoginScreen extends StatefulWidget {
   final AuthService authService;
+  final String initialEmail;
   final void Function(AuthSession session) onSignedIn;
 
   const LoginScreen({
     super.key,
     required this.authService,
+    this.initialEmail = '',
     required this.onSignedIn,
   });
 
@@ -125,7 +257,8 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final TextEditingController _emailCtrl = TextEditingController();
+  late final TextEditingController _emailCtrl =
+      TextEditingController(text: widget.initialEmail);
   final TextEditingController _passwordCtrl = TextEditingController();
   bool _isLoading = false;
   bool _obscurePassword = true;
@@ -155,6 +288,26 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => _errorText = userMessage(error));
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _openForgotPassword() async {
+    final email = await showDialog<String>(
+      context: context,
+      builder: (_) => _ForgotPasswordDialog(initialEmail: _emailCtrl.text),
+    );
+    if (email == null || email.isEmpty || !mounted) return;
+
+    try {
+      await widget.authService.requestPasswordReset(email);
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        'Đã gửi liên kết đặt lại mật khẩu tới $email. Vui lòng kiểm tra hộp thư đến hoặc thư rác.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(context, userMessage(error), isError: true);
     }
   }
 
@@ -274,6 +427,11 @@ class _LoginScreenState extends State<LoginScreen> {
                           _isLoading ? 'Đang đăng nhập...' : 'Đăng nhập',
                         ),
                       ),
+                      const SizedBox(height: 8),
+                      TextButton(
+                        onPressed: _isLoading ? null : _openForgotPassword,
+                        child: const Text('Quên mật khẩu?'),
+                      ),
                     ],
                   ),
                 ),
@@ -282,6 +440,84 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ForgotPasswordDialog extends StatefulWidget {
+  const _ForgotPasswordDialog({required this.initialEmail});
+
+  final String initialEmail;
+
+  @override
+  State<_ForgotPasswordDialog> createState() => _ForgotPasswordDialogState();
+}
+
+class _ForgotPasswordDialogState extends State<_ForgotPasswordDialog> {
+  late final TextEditingController _emailCtrl =
+      TextEditingController(text: widget.initialEmail.trim());
+  String? _validationError;
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty || !email.contains('@')) {
+      setState(() => _validationError = 'Vui lòng nhập địa chỉ Email hợp lệ.');
+      return;
+    }
+    Navigator.of(context).pop(email);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Quên mật khẩu'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Nhập email tài khoản Chủ tiệm để nhận liên kết đặt lại mật khẩu.',
+            style: TextStyle(fontSize: 13, color: AppColors.textMuted),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _emailCtrl,
+            keyboardType: TextInputType.emailAddress,
+            onChanged: (_) {
+              if (_validationError != null) {
+                setState(() => _validationError = null);
+              }
+            },
+            decoration: const InputDecoration(
+              labelText: 'Email tài khoản',
+              prefixIcon: Icon(Icons.email_outlined),
+            ),
+          ),
+          if (_validationError != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _validationError!,
+              style: const TextStyle(color: AppColors.danger, fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Hủy'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('Gửi email'),
+        ),
+      ],
     );
   }
 }
