@@ -199,14 +199,12 @@ class _BeautyCrmAppState extends State<BeautyCrmApp> {
 
   Future<void> _onSignOut() async {
     final tokenToRevoke = _accessToken;
+    setState(() {
+      _accessToken = '';
+      _refreshToken = '';
+      _userEmail = '';
+    });
     await _storage.clear();
-    if (mounted) {
-      setState(() {
-        _accessToken = '';
-        _refreshToken = '';
-        _userEmail = '';
-      });
-    }
     await _authService.signOut(tokenToRevoke);
   }
 
