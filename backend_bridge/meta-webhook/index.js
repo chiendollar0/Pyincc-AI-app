@@ -3,6 +3,14 @@ const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
+const {
+  AI_KEYS,
+  AI_REPLY_ENABLED,
+  callGemini,
+  getAiKeys,
+  isAiReplyEnabled,
+} = require('./src/ai/gemini');
+const { canReplyFreeform } = require('./src/chat/window');
 
 const app = express();
 app.disable('x-powered-by');
@@ -197,6 +205,8 @@ function requireRole(...allowedRoles) {
     ? next() : res.status(403).json({ error: 'FORBIDDEN_ROLE' });
 }
 
+const requireOwner = requireRole('owner');
+
 function safeEqual(received, expected) {
   if (typeof received !== 'string' || typeof expected !== 'string') return false;
   const a = Buffer.from(received);
@@ -229,7 +239,7 @@ app.get('/privacy', (_req, res) => res.type('html').send(
   '<h2>Các bên thứ ba xử lý dữ liệu</h2>' +
   '<ul>' +
   '<li><strong>Supabase:</strong> lưu trữ cơ sở dữ liệu hội thoại, lịch hẹn, nhật ký hoạt động và tệp ảnh khách hàng trong bucket riêng tư tách biệt theo từng tiệm (RLS chỉ cho phép chủ tiệm), truy cập qua đường dẫn ký có thời hạn (1 giờ).</li>' +
-  '<li><strong>Google Gemini API:</strong> tiếp nhận ảnh khách hàng (đã xóa siêu dữ liệu EXIF/GPS trước khi tải lên) và ghi chú ca tư vấn từ máy chủ PyinccCRM để phân tích dáng mặt và soạn gợi ý nội bộ cho chủ tiệm. Gemini không tự kết nối Facebook và không tự gửi tin nhắn cho khách.</li>' +
+  '<li><strong>Google Gemini API:</strong> tiếp nhận tin nhắn khách hàng và ảnh khách hàng (đã xóa siêu dữ liệu EXIF/GPS khi chủ tiệm xác nhận đồng ý) từ máy chủ PyinccCRM qua khóa Pro tách biệt để soạn bản nháp trả lời và gợi ý nội bộ cho chủ tiệm. Gemini không tự kết nối Facebook và không tự gửi tin nhắn cho khách.</li>' +
   '<li><strong>Meta Platforms:</strong> tiếp nhận webhook hội thoại được chuyển giao và gửi phản hồi Messenger đã được chủ tiệm duyệt sau khi tiệm chủ động kết nối Fanpage.</li>' +
   '</ul>' +
   '<h2>Thời gian lưu trữ &amp; Quyền xóa dữ liệu</h2>' +
@@ -392,165 +402,11 @@ async function recordAuditLog({
   }
 }
 
-async function countActiveOwners(orgId) {
-  const { count } = await supabase.from('memberships')
-    .select('id', { count: 'exact', head: true })
-    .eq('org_id', orgId)
-    .eq('role', 'owner')
-    .eq('status', 'active');
-  return count || 0;
-}
-
-app.get('/me', requireAuth, requireRole('owner'), (req, res) => res.json({
+app.get('/me', requireAuth, requireOwner, (req, res) => res.json({
   userId: req.authUser.id,
   email: req.authUser.email || null,
   orgId: req.orgId,
   role: req.userRole,
-}));
-
-app.get('/memberships', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
-  const { data, error } = await supabase.from('memberships')
-    .select('id, org_id, user_id, invited_email, invited_fb_user_id, role, status, created_at, updated_at')
-    .eq('org_id', req.orgId).order('created_at', { ascending: false });
-  if (error) return res.status(500).json({ error: 'Failed to load memberships' });
-  return res.json({ memberships: data || [], currentUserId: req.authUser.id });
-}));
-
-app.post('/memberships/invite', authWriteLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (_req, res) => {
-  return res.status(403).json({
-    error: 'SINGLE_OWNER_ONLY',
-    message: 'Phiên bản hiện tại chỉ hỗ trợ 1 tài khoản Chủ tiệm duy nhất.',
-  });
-}));
-
-function isLastOwnerDbError(err) {
-  return Boolean(err && (err.code === 'P0001' || String(err.message || '').includes('LAST_OWNER_PROTECTED')));
-}
-
-app.patch('/memberships/:id', writeLimiter, requireAuth, requireRole('owner'), express.json({ limit: '16kb' }), asyncHandler(async (req, res) => {
-  const nextRole = req.body?.role !== undefined ? String(req.body.role).trim() : undefined;
-  const nextStatus = req.body?.status !== undefined ? String(req.body.status).trim() : undefined;
-  if (nextRole !== undefined && !['owner', 'staff'].includes(nextRole)) {
-    return res.status(400).json({ error: 'INVALID_ROLE' });
-  }
-  if (nextStatus !== undefined && !['active', 'revoked'].includes(nextStatus)) {
-    return res.status(400).json({ error: 'INVALID_STATUS' });
-  }
-  if (nextRole === undefined && nextStatus === undefined) {
-    return res.status(400).json({ error: 'NO_CHANGES' });
-  }
-  if (nextRole !== undefined || nextStatus === 'active') {
-    return res.status(403).json({
-      error: 'SINGLE_OWNER_ONLY',
-      message: 'Phiên bản hiện tại chỉ hỗ trợ 1 tài khoản Chủ tiệm duy nhất.',
-    });
-  }
-
-  const { data: target, error: findErr } = await supabase.from('memberships')
-    .select('id, org_id, user_id, invited_email, role, status')
-    .eq('id', req.params.id)
-    .eq('org_id', req.orgId)
-    .maybeSingle();
-  if (findErr || !target) return res.status(404).json({ error: 'MEMBERSHIP_NOT_FOUND' });
-
-  if (target.user_id && String(target.user_id) === String(req.authUser.id)) {
-    return res.status(400).json({ error: 'CANNOT_MODIFY_SELF' });
-  }
-
-  const demotingActiveOwner = target.role === 'owner' && target.status === 'active' && nextStatus === 'revoked';
-  if (demotingActiveOwner) {
-    const activeOwners = await countActiveOwners(req.orgId);
-    if (activeOwners <= 1) {
-      return res.status(409).json({ error: 'LAST_OWNER_PROTECTED' });
-    }
-  }
-
-  const patch = { updated_at: new Date().toISOString() };
-  if (nextRole !== undefined) patch.role = nextRole;
-  if (nextStatus !== undefined) patch.status = nextStatus;
-
-  const { data: updated, error: updateErr } = await supabase.from('memberships')
-    .update(patch)
-    .eq('id', target.id)
-    .eq('org_id', req.orgId)
-    .select('id, org_id, user_id, invited_email, invited_fb_user_id, role, status, created_at, updated_at')
-    .single();
-  if (isLastOwnerDbError(updateErr)) return res.status(409).json({ error: 'LAST_OWNER_PROTECTED' });
-  if (updateErr || !updated) return res.status(500).json({ error: 'Failed to update membership' });
-
-  if (nextRole !== undefined && nextRole !== target.role) {
-    await recordAuditLog({
-      orgId: req.orgId,
-      actorUserId: req.authUser.id,
-      actorRole: req.userRole,
-      action: 'membership.role_changed',
-      targetType: 'membership',
-      targetId: updated.id,
-      metadata: {
-        invited_email: target.invited_email,
-        from_role: target.role,
-        to_role: nextRole,
-      },
-    });
-  }
-  if (nextStatus !== undefined && nextStatus !== target.status) {
-    await recordAuditLog({
-      orgId: req.orgId,
-      actorUserId: req.authUser.id,
-      actorRole: req.userRole,
-      action: nextStatus === 'revoked' ? 'membership.revoked' : 'membership.reactivated',
-      targetType: 'membership',
-      targetId: updated.id,
-      metadata: {
-        invited_email: target.invited_email,
-        from_status: target.status,
-        to_status: nextStatus,
-      },
-    });
-  }
-  return res.json({ success: true, membership: updated });
-}));
-
-app.post('/memberships/:id/revoke', writeLimiter, requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
-  const { data: target, error: findErr } = await supabase.from('memberships')
-    .select('id, org_id, user_id, invited_email, role, status')
-    .eq('id', req.params.id)
-    .eq('org_id', req.orgId)
-    .maybeSingle();
-  if (findErr || !target) return res.status(404).json({ error: 'MEMBERSHIP_NOT_FOUND' });
-
-  if (target.user_id && String(target.user_id) === String(req.authUser.id)) {
-    return res.status(400).json({ error: 'CANNOT_MODIFY_SELF' });
-  }
-  if (target.role === 'owner' && target.status === 'active') {
-    const activeOwners = await countActiveOwners(req.orgId);
-    if (activeOwners <= 1) {
-      return res.status(409).json({ error: 'LAST_OWNER_PROTECTED' });
-    }
-  }
-  if (target.status === 'revoked') {
-    return res.json({ success: true, membership: target });
-  }
-
-  const { data: updated, error: updateErr } = await supabase.from('memberships')
-    .update({ status: 'revoked', updated_at: new Date().toISOString() })
-    .eq('id', target.id)
-    .eq('org_id', req.orgId)
-    .select('id, org_id, user_id, invited_email, invited_fb_user_id, role, status, created_at, updated_at')
-    .single();
-  if (isLastOwnerDbError(updateErr)) return res.status(409).json({ error: 'LAST_OWNER_PROTECTED' });
-  if (updateErr || !updated) return res.status(500).json({ error: 'Failed to revoke membership' });
-
-  await recordAuditLog({
-    orgId: req.orgId,
-    actorUserId: req.authUser.id,
-    actorRole: req.userRole,
-    action: 'membership.revoked',
-    targetType: 'membership',
-    targetId: updated.id,
-    metadata: { invited_email: target.invited_email, previous_status: target.status, role: target.role },
-  });
-  return res.json({ success: true, membership: updated });
 }));
 
 app.get('/audit-logs', requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
@@ -1584,9 +1440,9 @@ async function dailyAiCount(orgId, excludeCaseId = null) {
 }
 
 async function analyzeCase({ orgId, text, imageBase64, mime, catalog, selectedItemId = null, excludeCaseId = null }) {
-  const geminiKey = String(process.env.GEMINI_API_KEY || '').trim();
-  if (!geminiKey) {
-    throw Object.assign(new Error('GEMINI_NOT_CONFIGURED'), { code: 'GEMINI_NOT_CONFIGURED' });
+  const customerKeys = getAiKeys().customer;
+  if (!customerKeys.length) {
+    throw Object.assign(new Error('AI_QUOTA_EXHAUSTED'), { code: 'AI_QUOTA_EXHAUSTED' });
   }
   const cap = await dailyAiCount(orgId, excludeCaseId);
   if (cap >= HANDOFF_DAILY_AI_CAP) {
@@ -1605,18 +1461,14 @@ async function analyzeCase({ orgId, text, imageBase64, mime, catalog, selectedIt
   if (imageBase64 && mime) {
     parts.push({ inline_data: { mime_type: mime, data: imageBase64 } });
   }
-  const { data } = await axios.post(
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
-    {
-      contents: [{ parts }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: ANALYSIS_SCHEMA,
-        temperature: 0.2,
-      },
+  const data = await callGemini('customer', {
+    contents: [{ parts }],
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseSchema: ANALYSIS_SCHEMA,
+      temperature: 0.2,
     },
-    { headers: { 'x-goog-api-key': geminiKey }, timeout: 30000 },
-  );
+  }, { httpClient: axios });
   const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
   const out = JSON.parse(rawText);
   if (!catalog.some((c) => String(c.id) === String(out.recommended_item_id))) {
@@ -1680,8 +1532,8 @@ app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner
     const mime = detectImageMime(buf);
     if (!mime) return res.status(415).json({ error: 'UNSUPPORTED_IMAGE_TYPE' });
 
-    const geminiKey = String(process.env.GEMINI_API_KEY || '').trim();
-    if (!geminiKey) return res.status(503).json({ error: 'GEMINI_NOT_CONFIGURED' });
+    const customerKeys = getAiKeys().customer;
+    if (!customerKeys.length) return res.status(503).json({ error: 'AI_QUOTA_EXHAUSTED' });
     const currentDailyCount = await dailyAiCount(req.orgId);
     if (currentDailyCount >= HANDOFF_DAILY_AI_CAP) {
       return res.status(429).json({ error: 'AI_DAILY_CAP' });
@@ -1734,20 +1586,20 @@ app.post('/handoff-cases/capture', writeLimiter, requireAuth, requireRole('owner
         message: err.message,
       }));
       await supabase.from('handoff_cases').update({ status: 'failed' }).eq('id', row.id).eq('org_id', req.orgId);
-      const status = err.code === 'AI_DAILY_CAP' ? 429 : (err.code === 'GEMINI_NOT_CONFIGURED' ? 503 : 502);
+      const status = err.code === 'AI_DAILY_CAP' ? 429 : (err.code === 'GEMINI_NOT_CONFIGURED' || err.code === 'AI_QUOTA_EXHAUSTED' ? 503 : 502);
       return res.status(status).json({ error: err.code || 'AI_FAILED', case_id: row.id });
     }
   }));
 
-app.post('/handoff-cases/:id/analyze', writeLimiter, requireAuth, requireRole('owner'), asyncHandler(async (req, res) => {
+app.post('/handoff-cases/:id/analyze', writeLimiter, requireAuth, requireOwner, asyncHandler(async (req, res) => {
   const { data: row } = await supabase.from('handoff_cases').select('*')
     .eq('id', req.params.id).eq('org_id', req.orgId).maybeSingle();
   if (!row) return res.status(404).json({ error: 'NOT_FOUND' });
   if (row.status !== 'new' && row.status !== 'failed') {
     return res.status(409).json({ error: 'ALREADY_ANALYZED' });
   }
-  const geminiKey = String(process.env.GEMINI_API_KEY || '').trim();
-  if (!geminiKey) return res.status(503).json({ error: 'GEMINI_NOT_CONFIGURED' });
+  const customerKeys = getAiKeys().customer;
+  if (!customerKeys.length) return res.status(503).json({ error: 'AI_QUOTA_EXHAUSTED' });
   const currentDailyCount = await dailyAiCount(req.orgId, row.id);
   if (currentDailyCount >= HANDOFF_DAILY_AI_CAP) {
     return res.status(429).json({ error: 'AI_DAILY_CAP' });
@@ -1801,7 +1653,7 @@ app.post('/handoff-cases/:id/analyze', writeLimiter, requireAuth, requireRole('o
       message: err.message,
     }));
     await supabase.from('handoff_cases').update({ status: 'failed' }).eq('id', row.id).eq('org_id', req.orgId);
-    const status = err.code === 'AI_DAILY_CAP' ? 429 : (err.code === 'GEMINI_NOT_CONFIGURED' ? 503 : 502);
+    const status = err.code === 'AI_DAILY_CAP' ? 429 : (err.code === 'GEMINI_NOT_CONFIGURED' || err.code === 'AI_QUOTA_EXHAUSTED' ? 503 : 502);
     return res.status(status).json({ error: err.code || 'AI_FAILED' });
   }
 }));
@@ -2259,11 +2111,19 @@ if (require.main === module) {
 }
 
 module.exports = {
+  AI_KEYS,
+  AI_REPLY_ENABLED,
   app,
+  callGemini,
+  canReplyFreeform,
   dailyAiCount,
+  getAiKeys,
+  isAiReplyEnabled,
   purgeFacebookUserData,
   recordAuditLog,
+  requireOwner,
   resolvePageCredentialsForOrg,
   uploadImageToSupabase,
   verifyFacebookSignedRequest,
+  verifyMetaSignature,
 };

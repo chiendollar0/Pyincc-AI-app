@@ -332,7 +332,8 @@ function createMockEnv() {
   process.env.META_APP_SECRET = 'test-meta-secret';
   process.env.VERIFY_TOKEN = 'test-verify-token';
   process.env.PAGE_TOKEN_ENC_KEY = 'test-enc-key';
-  process.env.GEMINI_API_KEY = 'test-gemini-key';
+  process.env.GEMINI_PRO_KEY_1 = 'test-gemini-pro-key-1';
+  process.env.GEMINI_FREE_KEY = 'test-gemini-free-key';
 
   const indexPath = require.resolve('../index.js');
   delete require.cache[indexPath];
@@ -645,8 +646,8 @@ test('Luồng B4 & revoked/non-owner guard: /api/tryon/generate returns 501; rev
   }
 });
 
-test('Single-owner v1 enforcement: invite/promote/reactivate blocked with 403 SINGLE_OWNER_ONLY; legacy staff revocable; audit_logs owner-only', async () => {
-  const { state, invoke, tokens } = createMockEnv();
+test('Single-owner v1 enforcement: /me and /audit-logs block non-owner accounts with 403 FORBIDDEN_ROLE', async () => {
+  const { invoke, tokens } = createMockEnv();
 
   // /me returns owner role; non-owner blocked
   const meOwner = await invoke('GET', '/me', { token: tokens.ownerToken });
@@ -656,51 +657,12 @@ test('Single-owner v1 enforcement: invite/promote/reactivate blocked with 403 SI
   assert.equal(meStaff.statusCode, 403);
   assert.equal(meStaff.body.error, 'FORBIDDEN_ROLE');
 
-  // Staff cannot access /memberships or /audit-logs
-  assert.equal((await invoke('GET', '/memberships', { token: tokens.staffToken })).statusCode, 403);
+  // Non-owner cannot access /audit-logs
   assert.equal((await invoke('GET', '/audit-logs', { token: tokens.staffToken })).statusCode, 403);
-
-  // Inviting additional accounts is locked in single-owner v1
-  const inviteRes = await invoke('POST', '/memberships/invite', {
-    token: tokens.ownerToken,
-    body: { email: 'newstaff@salon.vn' },
-  });
-  assert.equal(inviteRes.statusCode, 403);
-  assert.equal(inviteRes.body.error, 'SINGLE_OWNER_ONLY');
-
-  // Promoting or reactivating via PATCH is locked in single-owner v1
-  const promote = await invoke('PATCH', '/memberships/mem-staff', {
-    token: tokens.ownerToken,
-    body: { role: 'owner' },
-  });
-  assert.equal(promote.statusCode, 403);
-  assert.equal(promote.body.error, 'SINGLE_OWNER_ONLY');
-
-  const reactivate = await invoke('PATCH', '/memberships/mem-revoked', {
-    token: tokens.ownerToken,
-    body: { status: 'active' },
-  });
-  assert.equal(reactivate.statusCode, 403);
-  assert.equal(reactivate.body.error, 'SINGLE_OWNER_ONLY');
-
-  // Owner cannot revoke self
-  const selfRevoke = await invoke('POST', '/memberships/mem-owner/revoke', {
-    token: tokens.ownerToken,
-  });
-  assert.equal(selfRevoke.statusCode, 400);
-  assert.equal(selfRevoke.body.error, 'CANNOT_MODIFY_SELF');
-
-  // Owner CAN revoke a legacy non-owner membership and it is logged
-  const revoke = await invoke('POST', '/memberships/mem-staff/revoke', {
-    token: tokens.ownerToken,
-  });
-  assert.equal(revoke.statusCode, 200);
-  assert.equal(revoke.body.membership.status, 'revoked');
 
   const auditRes = await invoke('GET', '/audit-logs', { token: tokens.ownerToken });
   assert.equal(auditRes.statusCode, 200);
-  assert.ok(auditRes.body.logs.some((l) => l.action === 'membership.revoked'));
-  assert.equal(state.tables.memberships.filter((m) => m.role === 'owner' && m.status === 'active').length, 1);
+  assert.ok(Array.isArray(auditRes.body.logs));
 });
 
 test('Giai đoạn 3 - C4: /privacy, /terms, and /data-deletion clarify single-owner model & Facebook removal vs Supabase deletion', async () => {
